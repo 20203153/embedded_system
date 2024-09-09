@@ -113,7 +113,7 @@ def test_and_save_results(model, test_images, test_labels, save_dir="./results")
     # 대표 데이터셋 설정 (float32 -> int8 양자화에 사용)
     def representative_data_gen():
         for input_value in tf.data.Dataset.from_tensor_slices(train_images).batch(1).take(100):  # 데이터셋의 일부를 사용
-            yield [input_value.astype(np.float32)]  # float32로 입력
+            yield [input_value.dtype(np.float32)]  # float32로 입력
 
     # 대표 데이터셋을 양자화에 사용
     converter.representative_dataset = representative_data_gen
