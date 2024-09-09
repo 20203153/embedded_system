@@ -1,9 +1,11 @@
 import cv2
 import os
+
+import keras
 import pandas as pd
 import numpy as np
 from keras import layers, models
-import tensorflow as tf
+from keras.src.callbacks import EarlyStopping
 
 
 # 모델 정의 (이미지 -> 카메라 각도 예측 모델)
@@ -12,20 +14,20 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     inputs = layers.Input(shape=input_shape)
 
     # 합성곱 층 + 맥스풀링
-    x = layers.Conv2D(32, (3, 3), activation='relu')(inputs)
+    x = layers.Conv2D(32, (3, 3), activation='relu', kernel_regularizer=keras.regularizers.l2(0.001))(inputs)
     x = layers.MaxPooling2D((2, 2))(x)
-    x = layers.Conv2D(64, (3, 3), activation='relu')(x)
+    x = layers.Conv2D(64, (3, 3), activation='relu', kernel_regularizer=keras.regularizers.l2(0.001))(x)
     x = layers.MaxPooling2D((2, 2))(x)
-    x = layers.Conv2D(128, (3, 3), activation='relu')(x)
+    x = layers.Conv2D(128, (3, 3), activation='relu', kernel_regularizer=keras.regularizers.l2(0.001))(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 평탄화 (Flatten) 후 Fully Connected 층
     x = layers.Flatten()(x)
-    x = layers.Dense(256, activation='relu')(x)
-    x = layers.Dense(128, activation='relu')(x)
+    x = layers.Dense(256, activation='relu', kernel_regularizer=keras.regularizers.l2(0.001))(x)
+    x = layers.Dense(128, activation='relu', kernel_regularizer=keras.regularizers.l2(0.001))(x)
 
     # 출력층 (카메라 상하 및 좌우 각도 예측)
-    outputs = layers.Dense(2, activation='tanh')(x)  # -1 <= x, y <= 1 사이 값으로 각도 예측
+    outputs = layers.Dense(2, activation='linear')(x)  # -1 <= x, y <= 1 사이 값으로 각도 예측
 
     model = models.Model(inputs=inputs, outputs=outputs)
     return model
@@ -106,10 +108,15 @@ def train_camera_control_model(train_images, train_labels, test_images, test_lab
     model = build_camera_control_model()
 
     # 모델 컴파일
-    model.compile(optimizer='adam', loss='mean_squared_error', metrics=['mae'])
+    model.compile(optimizer=keras.optimizers.Adam(1e-4, clipnorm=1.0), loss='mean_squared_error', metrics=['mae'])
+
+    early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
 
     # 모델 학습
-    history = model.fit(train_images, train_labels, validation_data=(test_images, test_labels), epochs=epochs, batch_size=batch_size)
+    history = model.fit(
+        train_images, train_labels, validation_data=(test_images, test_labels),
+        epochs=epochs, batch_size=batch_size, callbacks=[early_stopping]
+    )
 
     # 학습 완료 후 모델 저장
     os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
