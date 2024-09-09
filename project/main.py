@@ -4,6 +4,8 @@ import os
 import keras
 import pandas as pd
 import numpy as np
+import tensorflow as tf
+
 from keras import layers, models
 from keras.src.callbacks import EarlyStopping
 
@@ -101,6 +103,31 @@ def test_and_save_results(model, test_images, test_labels, save_dir="./results")
         save_result_image(image, predicted_action, target_action, i + 1, save_dir)
 
     print(f"All results saved to {save_dir}")
+
+    # TensorFlow Lite Converter 사용
+    converter = tf.lite.TFLiteConverter.from_keras_model(model)
+
+    # 양자화 옵션 설정 (EdgeTPU에서 실행하기 위해 양자화 필요)
+    converter.optimizations = [tf.lite.Optimize.DEFAULT]  # 기본 최적화를 적용
+
+    # 양자화 과정에서 필요한 입력 타입 및 스케일 설정 (int8로 양자화)
+    def representative_data_gen():
+        for input_value in tf.data.Dataset.from_tensor_slices(train_images).batch(1).take(100):  # 데이터셋의 일부를 사용
+            yield [input_value]
+
+    converter.representative_dataset = representative_data_gen
+    converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]  # INT8 양자화
+    converter.inference_input_type = tf.uint8  # 입력 타입을 uint8로 설정
+    converter.inference_output_type = tf.uint8  # 출력 타입을 uint8로 설정
+
+    # 모델을 TensorFlow Lite 형식으로 변환
+    tflite_model = converter.convert()
+
+    # 변환된 모델을 저장
+    with open('model_quantized.tflite', 'wb') as f:
+        f.write(tflite_model)
+
+    print("TensorFlow Lite model has been saved as 'model_quantized.tflite'")
 
 
 # 학습 함수
