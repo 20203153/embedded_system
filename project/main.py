@@ -87,8 +87,22 @@ def load_dataset(train_csv, train_folder, empty_folder, test_csv, test_folder, i
     return train_images, train_labels, test_images, test_labels
 
 
+# 테스트 데이터에 대해 예측을 수행하고, 그림을 저장하는 함수
+def test_and_save_results(model, test_images, test_labels, save_dir="./results"):
+    os.makedirs(save_dir, exist_ok=True)
+
+    # 테스트 데이터에 대해 예측 수행
+    predictions = model.predict(test_images)
+
+    for i, (image, predicted_action, target_action) in enumerate(zip(test_images, predictions, test_labels)):
+        # 결과 이미지를 저장
+        save_result_image(image, predicted_action, target_action, i + 1, save_dir)
+
+    print(f"All results saved to {save_dir}")
+
+
 # 학습 함수
-def train_camera_control_model(train_images, train_labels, test_images, test_labels, model_save_path="./models/final_model.h5", batch_size=32, epochs=50):
+def train_camera_control_model(train_images, train_labels, test_images, test_labels, model_save_path="./models/final_model.h5", batch_size=32, epochs=500, results_dir="./results"):
     model = build_camera_control_model()
 
     # 모델 컴파일
@@ -102,7 +116,36 @@ def train_camera_control_model(train_images, train_labels, test_images, test_lab
     model.save(model_save_path)
     print(f"Final model saved to {model_save_path}")
 
+    # 테스트 데이터에 대해 예측을 수행하고 결과 저장
+    test_and_save_results(model, test_images, test_labels, save_dir=results_dir)
+
     return model, history
+
+
+# 이미지에 예측된 위치와 목표 위치를 그려서 저장하는 함수
+def save_result_image(state, predicted_action, target_action, episode, save_dir):
+    # 이미지를 (128, 128, 1) -> (128, 128)로 변환
+    img = state.squeeze()
+
+    # 그레이스케일 이미지를 컬러 이미지로 변환 (BGR 채널로)
+    img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
+    # 예측된 좌표와 목표 좌표를 실제 이미지 크기에 맞게 변환 ([-1, 1] 범위를 [0, 128]로 변환)
+    predicted_x = int((predicted_action[0] + 1) * 64)
+    predicted_y = int((predicted_action[1] + 1) * 64)
+    target_x = int((target_action[0] + 1) * 64)
+    target_y = int((target_action[1] + 1) * 64)
+
+    # 예측된 위치를 빨간색 원으로 표시
+    cv2.circle(img_color, (predicted_x, predicted_y), 5, (0, 0, 255), -1)  # 빨간색 원: 예측 위치
+
+    # 목표 위치를 초록색 원으로 표시
+    cv2.circle(img_color, (target_x, target_y), 5, (0, 255, 0), -1)  # 초록색 원: 목표 위치
+
+    # 이미지 파일로 저장
+    image_path = os.path.join(save_dir, f"episode_{episode}.png")
+    cv2.imwrite(image_path, img_color)
+    print(f"Saved image for episode {episode} to {image_path}")
 
 
 # 메인 실행 함수
