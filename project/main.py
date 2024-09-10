@@ -57,6 +57,10 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     x = keras.activations.swish(x)
     x = layers.Dropout(0.3)(x)  # Dropout 추가
 
+    x = layers.Dense(64, kernel_regularizer=keras.regularizers.l2(0.001))(x)
+    x = keras.activations.swish(x)
+    x = layers.Dropout(0.3)(x)  # Dropout 추가
+
     # 출력층 (카메라 상하 및 좌우 각도 예측)
     outputs = layers.Dense(2, activation='linear')(x)
 
