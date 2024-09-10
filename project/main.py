@@ -16,45 +16,45 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     inputs = layers.Input(shape=input_shape)
 
     # 첫 번째 합성곱 층 + 맥스풀링 + Batch Normalization
-    x = layers.Conv2D(32, (3, 3), activation=keras.activations.leaky_relu(0.1), padding='same',
+    x = layers.Conv2D(32, (3, 3), activation=keras.activations.leaky_relu(negative_slope=0.2), padding='same',
                       kernel_regularizer=keras.regularizers.l2(0.001))(inputs)
     x = layers.BatchNormalization()(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 두 번째 합성곱 층 + 맥스풀링 + Batch Normalization
-    x = layers.Conv2D(64, (3, 3), activation=keras.activations.leaky_relu(0.1), padding='same',
+    x = layers.Conv2D(64, (3, 3), activation=keras.activations.leaky_relu(negative_slope=0.2), padding='same',
                       kernel_regularizer=keras.regularizers.l2(0.001))(x)
     x = layers.BatchNormalization()(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 세 번째 합성곱 층 + 맥스풀링 + Batch Normalization
-    x = layers.Conv2D(128, (3, 3), activation=keras.activations.leaky_relu(0.1), padding='same',
+    x = layers.Conv2D(128, (3, 3), activation=keras.activations.leaky_relu(negative_slope=0.2), padding='same',
                       kernel_regularizer=keras.regularizers.l2(0.001))(x)
     x = layers.BatchNormalization()(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 네 번째 합성곱 층 + 맥스풀링 + Batch Normalization (층을 더 깊게 구성)
-    x = layers.Conv2D(256, (3, 3), activation=keras.activations.leaky_relu(0.1), padding='same',
+    x = layers.Conv2D(256, (3, 3), activation=keras.activations.leaky_relu(negative_slope=0.2), padding='same',
                       kernel_regularizer=keras.regularizers.l2(0.001))(x)
     x = layers.BatchNormalization()(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 평탄화 (Flatten) 후 Fully Connected 층
     x = layers.Flatten()(x)
-    x = layers.Dense(512, activation=keras.activations.leaky_relu(0.1), kernel_regularizer=keras.regularizers.l2(0.001))(x)  # 노드를 512로 증가
-    x = layers.Dropout(0.5)(x)  # Dropout 추가
+    x = layers.Dense(512, activation=keras.activations.leaky_relu(negative_slope=0.2), kernel_regularizer=keras.regularizers.l2(0.001))(x)  # 노드를 512로 증가
+    x = layers.Dropout(0.2)(x)  # Dropout 추가
 
-    x = layers.Dense(256, activation=keras.activations.leaky_relu(0.1), kernel_regularizer=keras.regularizers.l2(0.001))(x)
-    x = layers.Dropout(0.5)(x)  # Dropout 추가
+    x = layers.Dense(256, activation=keras.activations.leaky_relu(negative_slope=0.2), kernel_regularizer=keras.regularizers.l2(0.001))(x)
+    x = layers.Dropout(0.2)(x)  # Dropout 추가
 
-    x = layers.Dense(128, activation=keras.activations.leaky_relu(0.1), kernel_regularizer=keras.regularizers.l2(0.001))(x)
-    x = layers.Dropout(0.5)(x)  # Dropout 추가
+    x = layers.Dense(128, activation=keras.activations.leaky_relu(negative_slope=0.2), kernel_regularizer=keras.regularizers.l2(0.001))(x)
+    x = layers.Dropout(0.2)(x)  # Dropout 추가
 
-    x = layers.Dense(64, activation=keras.activations.leaky_relu(0.1), kernel_regularizer=keras.regularizers.l2(0.001))(x)
-    x = layers.Dropout(0.5)(x)  # Dropout 추가
+    x = layers.Dense(64, activation=keras.activations.leaky_relu(negative_slope=0.2), kernel_regularizer=keras.regularizers.l2(0.001))(x)
+    x = layers.Dropout(0.2)(x)  # Dropout 추가
 
-    x = layers.Dense(32, activation=keras.activations.leaky_relu(0.1), kernel_regularizer=keras.regularizers.l2(0.001))(x)
-    x = layers.Dropout(0.5)(x)  # Dropout 추가
+    x = layers.Dense(32, activation=keras.activations.leaky_relu(negative_slope=0.2), kernel_regularizer=keras.regularizers.l2(0.001))(x)
+    x = layers.Dropout(0.2)(x)  # Dropout 추가
 
     # 출력층 (카메라 상하 및 좌우 각도 예측)
     outputs = layers.Dense(2, activation='linear')(x)
