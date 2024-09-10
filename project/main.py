@@ -15,21 +15,40 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     # 입력 레이어
     inputs = layers.Input(shape=input_shape)
 
-    # 합성곱 층 + 맥스풀링
-    x = layers.Conv2D(32, (3, 3), activation='relu', kernel_regularizer=keras.regularizers.l2(0.001))(inputs)
+    # 첫 번째 합성곱 층 + 맥스풀링 + Batch Normalization
+    x = layers.Conv2D(32, (3, 3), activation='relu', padding='same',
+                      kernel_regularizer=keras.regularizers.l2(0.001))(inputs)
+    x = layers.BatchNormalization()(x)
     x = layers.MaxPooling2D((2, 2))(x)
-    x = layers.Conv2D(64, (3, 3), activation='relu', kernel_regularizer=keras.regularizers.l2(0.001))(x)
+
+    # 두 번째 합성곱 층 + 맥스풀링 + Batch Normalization
+    x = layers.Conv2D(64, (3, 3), activation='relu', padding='same',
+                      kernel_regularizer=keras.regularizers.l2(0.001))(x)
+    x = layers.BatchNormalization()(x)
     x = layers.MaxPooling2D((2, 2))(x)
-    x = layers.Conv2D(128, (3, 3), activation='relu', kernel_regularizer=keras.regularizers.l2(0.001))(x)
+
+    # 세 번째 합성곱 층 + 맥스풀링 + Batch Normalization
+    x = layers.Conv2D(128, (3, 3), activation='relu', padding='same',
+                      kernel_regularizer=keras.regularizers.l2(0.001))(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling2D((2, 2))(x)
+
+    # 네 번째 합성곱 층 + 맥스풀링 + Batch Normalization (층을 더 깊게 구성)
+    x = layers.Conv2D(256, (3, 3), activation='relu', padding='same',
+                      kernel_regularizer=keras.regularizers.l2(0.001))(x)
+    x = layers.BatchNormalization()(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 평탄화 (Flatten) 후 Fully Connected 층
     x = layers.Flatten()(x)
+    x = layers.Dense(512, activation='relu', kernel_regularizer=keras.regularizers.l2(0.001))(x)  # 노드를 512로 증가
+    x = layers.Dropout(0.5)(x)  # Dropout 추가
+
     x = layers.Dense(256, activation='relu', kernel_regularizer=keras.regularizers.l2(0.001))(x)
-    x = layers.Dense(128, activation='relu', kernel_regularizer=keras.regularizers.l2(0.001))(x)
+    x = layers.Dropout(0.5)(x)  # Dropout 추가
 
     # 출력층 (카메라 상하 및 좌우 각도 예측)
-    outputs = layers.Dense(2, activation='linear')(x)  # -1 <= x, y <= 1 사이 값으로 각도 예측
+    outputs = layers.Dense(2, activation='linear')(x)
 
     model = models.Model(inputs=inputs, outputs=outputs)
     return model
