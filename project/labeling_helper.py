@@ -74,5 +74,6 @@ def label_images():
 
     cv2.destroyAllWindows()
 
+
 if __name__ == "__main__":
     label_images()

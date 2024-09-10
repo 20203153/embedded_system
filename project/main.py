@@ -81,12 +81,12 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128))
 
 
 # 데이터셋 로드 함수
-def load_dataset(train_csv, train_folder, empty_folder, test_csv, test_folder, img_size=(128, 128)):
+def load_dataset(train_csv, train_folder, empty_folder, test_csv, test_folder, test_empty_folder, img_size=(128, 128)):
     # 학습 데이터 로드 (공이 있는 데이터와 없는 데이터 함께)
     train_images, train_labels = load_labeled_data(train_csv, train_folder, empty_folder, img_size)
 
     # 테스트 데이터 로드 (공이 있는 데이터만)
-    test_images, test_labels = load_labeled_data(test_csv, test_folder, empty_folder, img_size)
+    test_images, test_labels = load_labeled_data(test_csv, test_folder, test_empty_folder, img_size)
 
     return train_images, train_labels, test_images, test_labels
 
@@ -189,13 +189,14 @@ def save_result_image(state, predicted_action, target_action, episode, save_dir)
 if __name__ == '__main__':
     # 학습 및 테스트 데이터 경로 설정
     train_csv = './data/train_labels.csv'
-    train_folder = './data/train/balls'
+    train_folder = './data/train/augmented'
     empty_folder = './data/train/empty'
     test_csv = './data/test_labels.csv'
-    test_folder = './data/test/balls'
+    test_folder = './data/test/augmented'
+    test_empty_folder = './data/test/empty'
 
     # 데이터셋 로드
-    train_images, train_labels, test_images, test_labels = load_dataset(train_csv, train_folder, empty_folder, test_csv, test_folder)
+    train_images, train_labels, test_images, test_labels = load_dataset(train_csv, train_folder, empty_folder, test_csv, test_folder, test_empty_folder)
 
     print(f"Loaded: {len(train_images)} training images, {len(test_images)} testing images")
 
