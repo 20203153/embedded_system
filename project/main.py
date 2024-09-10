@@ -7,7 +7,7 @@ import numpy as np
 import tensorflow as tf
 
 from keras import layers, models
-from keras.src.callbacks import EarlyStopping
+from keras.src.callbacks import EarlyStopping, ReduceLROnPlateau
 
 
 # 모델 정의 (이미지 -> 카메라 각도 예측 모델)
@@ -18,52 +18,44 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     # 첫 번째 합성곱 층 + 맥스풀링 + Batch Normalization
     x = layers.Conv2D(32, (3, 3), padding='same',
                       kernel_regularizer=keras.regularizers.l2(0.001))(inputs)
-    x = keras.activations.leaky_relu(x, negative_slope=0.2)
+    x = keras.activations.swish(x)
     x = layers.BatchNormalization()(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 두 번째 합성곱 층 + 맥스풀링 + Batch Normalization
     x = layers.Conv2D(64, (3, 3), padding='same',
                       kernel_regularizer=keras.regularizers.l2(0.001))(x)
-    x = keras.activations.leaky_relu(x, negative_slope=0.2)
+    x = keras.activations.swish(x)
     x = layers.BatchNormalization()(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 세 번째 합성곱 층 + 맥스풀링 + Batch Normalization
     x = layers.Conv2D(128, (3, 3), padding='same',
                       kernel_regularizer=keras.regularizers.l2(0.001))(x)
-    x = keras.activations.leaky_relu(x, negative_slope=0.2)
+    x = keras.activations.swish(x)
     x = layers.BatchNormalization()(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 네 번째 합성곱 층 + 맥스풀링 + Batch Normalization (층을 더 깊게 구성)
     x = layers.Conv2D(256, (3, 3), padding='same',
                       kernel_regularizer=keras.regularizers.l2(0.001))(x)
-    x = keras.activations.leaky_relu(x, negative_slope=0.2)
+    x = keras.activations.swish(x)
     x = layers.BatchNormalization()(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 평탄화 (Flatten) 후 Fully Connected 층
-    x = layers.Flatten()(x)
+    x = layers.GlobalAveragePooling2D()(x)
     x = layers.Dense(512, kernel_regularizer=keras.regularizers.l2(0.001))(x)  # 노드를 512로 증가
-    x = keras.activations.leaky_relu(x, negative_slope=0.2)
-    x = layers.Dropout(0.2)(x)  # Dropout 추가
+    x = keras.activations.swish(x)
+    x = layers.Dropout(0.3)(x)  # Dropout 추가
 
     x = layers.Dense(256, kernel_regularizer=keras.regularizers.l2(0.001))(x)
-    x = keras.activations.leaky_relu(x, negative_slope=0.2)
-    x = layers.Dropout(0.2)(x)  # Dropout 추가
+    x = keras.activations.swish(x)
+    x = layers.Dropout(0.3)(x)  # Dropout 추가
 
     x = layers.Dense(128, kernel_regularizer=keras.regularizers.l2(0.001))(x)
-    x = keras.activations.leaky_relu(x, negative_slope=0.2)
-    x = layers.Dropout(0.2)(x)  # Dropout 추가
-
-    x = layers.Dense(64, kernel_regularizer=keras.regularizers.l2(0.001))(x)
-    x = keras.activations.leaky_relu(x, negative_slope=0.2)
-    x = layers.Dropout(0.2)(x)  # Dropout 추가
-
-    x = layers.Dense(32, kernel_regularizer=keras.regularizers.l2(0.001))(x)
-    x = keras.activations.leaky_relu(x, negative_slope=0.2)
-    x = layers.Dropout(0.2)(x)  # Dropout 추가
+    x = keras.activations.swish(x)
+    x = layers.Dropout(0.3)(x)  # Dropout 추가
 
     # 출력층 (카메라 상하 및 좌우 각도 예측)
     outputs = layers.Dense(2, activation='linear')(x)
@@ -178,11 +170,12 @@ def train_camera_control_model(train_images, train_labels, test_images, test_lab
     model.compile(optimizer=keras.optimizers.Adam(1e-4, clipnorm=1.0), loss='mean_squared_error', metrics=['mae'])
 
     early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+    reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6)
 
     # 모델 학습
     history = model.fit(
         train_images, train_labels, validation_data=(test_images, test_labels),
-        epochs=epochs, batch_size=batch_size, callbacks=[early_stopping]
+        epochs=epochs, batch_size=batch_size, callbacks=[early_stopping, reduce_lr ]
     )
 
     # 학습 완료 후 모델 저장
