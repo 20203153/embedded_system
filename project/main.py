@@ -18,7 +18,7 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     # 첫 번째 합성곱 층 + 맥스풀링 + Batch Normalization
     x = layers.Conv2D(32, (3, 3), padding='same',
                       kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
-                      kernal_initializer='he_normal')(inputs)
+                      kernel_initializer='he_normal')(inputs)
     x = layers.BatchNormalization()(x)
     x = keras.activations.swish(x)
     x = layers.MaxPooling2D((2, 2))(x)
@@ -26,7 +26,7 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     # 두 번째 합성곱 층 + 맥스풀링 + Batch Normalization
     x = layers.Conv2D(64, (3, 3), padding='same',
                       kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
-                      kernal_initializer='he_normal')(x)
+                      kernel_initializer='he_normal')(x)
     x = layers.BatchNormalization()(x)
     x = keras.activations.swish(x)
     x = layers.MaxPooling2D((2, 2))(x)
@@ -34,7 +34,7 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     # 세 번째 합성곱 층 + 맥스풀링 + Batch Normalization
     x = layers.Conv2D(128, (3, 3), padding='same',
                       kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
-                      kernal_initializer='he_normal')(x)
+                      kernel_initializer='he_normal')(x)
     x = layers.BatchNormalization()(x)
     x = keras.activations.swish(x)
     x = layers.MaxPooling2D((2, 2))(x)
@@ -42,7 +42,7 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     # 네 번째 합성곱 층 + 맥스풀링 + Batch Normalization (층을 더 깊게 구성)
     x = layers.Conv2D(256, (3, 3), padding='same',
                       kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
-                      kernal_initializer='he_normal')(x)
+                      kernel_initializer='he_normal')(x)
     x = layers.BatchNormalization()(x)
     x = keras.activations.swish(x)
     x = layers.MaxPooling2D((2, 2))(x)
