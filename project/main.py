@@ -17,51 +17,47 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
 
     # 첫 번째 합성곱 층 + 맥스풀링 + Batch Normalization
     x = layers.Conv2D(32, (3, 3), padding='same',
-                      kernel_regularizer=keras.regularizers.l2(0.001))(inputs)
-    x = keras.activations.swish(x)
+                      kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
+                      kernal_initializer='he_normal')(inputs)
     x = layers.BatchNormalization()(x)
+    x = keras.activations.swish(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 두 번째 합성곱 층 + 맥스풀링 + Batch Normalization
     x = layers.Conv2D(64, (3, 3), padding='same',
-                      kernel_regularizer=keras.regularizers.l2(0.001))(x)
-    x = keras.activations.swish(x)
+                      kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
+                      kernal_initializer='he_normal')(x)
     x = layers.BatchNormalization()(x)
+    x = keras.activations.swish(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 세 번째 합성곱 층 + 맥스풀링 + Batch Normalization
     x = layers.Conv2D(128, (3, 3), padding='same',
-                      kernel_regularizer=keras.regularizers.l2(0.001))(x)
-    x = keras.activations.swish(x)
+                      kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
+                      kernal_initializer='he_normal')(x)
     x = layers.BatchNormalization()(x)
+    x = keras.activations.swish(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 네 번째 합성곱 층 + 맥스풀링 + Batch Normalization (층을 더 깊게 구성)
     x = layers.Conv2D(256, (3, 3), padding='same',
-                      kernel_regularizer=keras.regularizers.l2(0.001))(x)
-    x = keras.activations.swish(x)
+                      kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
+                      kernal_initializer='he_normal')(x)
     x = layers.BatchNormalization()(x)
+    x = keras.activations.swish(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 평탄화 (Flatten) 후 Fully Connected 층
     x = layers.GlobalAveragePooling2D()(x)
-    x = layers.Dense(512, kernel_regularizer=keras.regularizers.l2(0.001))(x)  # 노드를 512로 증가
+    x = layers.Dense(512, kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)  # 노드를 512로 증가
     x = keras.activations.swish(x)
     x = layers.Dropout(0.3)(x)  # Dropout 추가
 
-    x = layers.Dense(256, kernel_regularizer=keras.regularizers.l2(0.001))(x)
+    x = layers.Dense(128, kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)
     x = keras.activations.swish(x)
     x = layers.Dropout(0.3)(x)  # Dropout 추가
 
-    x = layers.Dense(128, kernel_regularizer=keras.regularizers.l2(0.001))(x)
-    x = keras.activations.swish(x)
-    x = layers.Dropout(0.3)(x)  # Dropout 추가
-
-    x = layers.Dense(64, kernel_regularizer=keras.regularizers.l2(0.001))(x)
-    x = keras.activations.swish(x)
-    x = layers.Dropout(0.3)(x)  # Dropout 추가
-
-    x = layers.Dense(32, kernel_regularizer=keras.regularizers.l2(0.001))(x)
+    x = layers.Dense(32, kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)
     x = keras.activations.swish(x)
     x = layers.Dropout(0.3)(x)  # Dropout 추가
 
@@ -171,13 +167,15 @@ def test_and_save_results(model, test_images, test_labels, save_dir="./results")
 
 
 # 학습 함수
-def train_camera_control_model(train_images, train_labels, test_images, test_labels, model_save_path="./models/final_model.h5", batch_size=32, epochs=500, results_dir="./results"):
+def train_camera_control_model(train_images, train_labels, test_images, test_labels,
+                               model_save_path="./models/final_model.h5", batch_size=32, epochs=500,
+                               results_dir="./results"):
     model = build_camera_control_model()
 
     # 모델 컴파일
-    model.compile(optimizer=keras.optimizers.Adam(1e-4, clipnorm=1.0), loss='mean_squared_error', metrics=['mae'])
+    model.compile(optimizer=keras.optimizers.AdamW(1e-4, weight_decay=1e-5), loss='mean_squared_error', metrics=['mae'])
 
-    early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+    early_stopping = EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True)
     reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6)
 
     # 모델 학습
@@ -235,7 +233,8 @@ if __name__ == '__main__':
     test_empty_folder = './data/test/empty'
 
     # 데이터셋 로드
-    train_images, train_labels, test_images, test_labels = load_dataset(train_csv, train_folder, empty_folder, test_csv, test_folder, test_empty_folder)
+    train_images, train_labels, test_images, test_labels = load_dataset(train_csv, train_folder, empty_folder, test_csv,
+                                                                        test_folder, test_empty_folder)
 
     print(f"Loaded: {len(train_images)} training images, {len(test_images)} testing images")
 
