@@ -183,7 +183,8 @@ def train_camera_control_model(train_images, train_labels, test_images, test_lab
     # 모델 학습
     history = model.fit(
         train_images, train_labels, validation_data=(test_images, test_labels),
-        epochs=epochs, batch_size=batch_size, callbacks=[early_stopping, reduce_lr ]
+        epochs=epochs, batch_size=batch_size, callbacks=[early_stopping, reduce_lr],
+        shuffle=True
     )
 
     # 학습 완료 후 모델 저장
