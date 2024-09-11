@@ -183,6 +183,8 @@ def train_camera_control_model(train_images, train_labels, test_images, test_lab
     # 모델 컴파일
     model.compile(optimizer=keras.optimizers.AdamW(1e-4, clipnorm=1.0), loss='mean_squared_error', metrics=['mae'])
 
+    model.summary()
+
     early_stopping = EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True)
     reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6)
 
