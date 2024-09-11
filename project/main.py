@@ -30,7 +30,7 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     x = layers.Conv2D(32, (3, 3), padding='same',
                       kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
                       kernel_initializer='he_normal')(inputs)
-    x = layers.BatchNormalization()(x)
+    x = layers.LayerNormalization()(x)
     x = Mish()(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
@@ -38,7 +38,7 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     x = layers.Conv2D(64, (3, 3), padding='same',
                       kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
                       kernel_initializer='he_normal')(x)
-    x = layers.BatchNormalization()(x)
+    x = layers.LayerNormalization()(x)
     x = Mish()(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
@@ -46,7 +46,7 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     x = layers.Conv2D(128, (3, 3), padding='same',
                       kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
                       kernel_initializer='he_normal')(x)
-    x = layers.BatchNormalization()(x)
+    x = layers.LayerNormalization()(x)
     x = Mish()(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
@@ -54,7 +54,7 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     x = layers.Conv2D(256, (3, 3), padding='same',
                       kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
                       kernel_initializer='he_normal')(x)
-    x = layers.BatchNormalization()(x)
+    x = layers.LayerNormalization()(x)
     x = Mish()(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
@@ -73,7 +73,7 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     x = layers.Dropout(0.3)(x)  # Dropout 추가
 
     # 출력층 (카메라 상하 및 좌우 각도 예측)
-    outputs = layers.Dense(2, activation='tanh')(x)
+    outputs = layers.Dense(2, activation='tanh', kernel_regularizer=keras.regularizers.l2(0.001))(x)
 
     model = models.Model(inputs=inputs, outputs=outputs)
     return model
@@ -184,7 +184,7 @@ def train_camera_control_model(train_images, train_labels, test_images, test_lab
     model = build_camera_control_model()
 
     # 모델 컴파일
-    model.compile(optimizer=keras.optimizers.AdamW(1e-4, weight_decay=1e-5), loss='mean_squared_error', metrics=['mae'])
+    model.compile(optimizer=keras.optimizers.AdamW(1e-4, clipnorm=1.0), loss='mean_squared_error', metrics=['mae'])
 
     early_stopping = EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True)
     reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6)
@@ -244,8 +244,7 @@ if __name__ == '__main__':
     test_empty_folder = './data/test/empty'
 
     # 데이터셋 로드
-    train_images, train_labels, test_images, test_labels = load_dataset(train_csv, train_folder, empty_folder, test_csv,
-                                                                        test_folder, test_empty_folder)
+    train_images, train_labels, test_images, test_labels = load_dataset(train_csv, train_folder, empty_folder, test_csv, test_folder, test_empty_folder)
 
     print(f"Loaded: {len(train_images)} training images, {len(test_images)} testing images")
 
