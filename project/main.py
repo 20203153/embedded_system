@@ -21,6 +21,30 @@ class Mish(layers.Layer):
         return mish(inputs)
 
 
+def residual_block(x, filters):
+    shortcut = x
+    x = layers.Conv2D(filters, (3, 3), padding='same', kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)
+    x = layers.BatchNormalization()(x)
+    x = Mish()(x)
+
+    x = layers.Conv2D(filters, (3, 3), padding='same', kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)
+    x = layers.BatchNormalization()(x)
+
+    x = layers.add([x, shortcut])  # Skip connection
+    x = Mish()(x)
+    return x
+
+
+def squeeze_excite_block(input, ratio=16):
+    filters = input.shape[-1]  # 채널 수
+    se = layers.GlobalAveragePooling2D()(input)
+    se = layers.Dense(filters // ratio, activation='relu')(se)
+    se = layers.Dense(filters, activation='sigmoid')(se)
+    se = layers.Reshape((1, 1, filters))(se)
+    x = layers.multiply([input, se])
+    return x
+
+
 # 모델 정의 (이미지 -> 카메라 각도 예측 모델)
 def build_camera_control_model(input_shape=(128, 128, 1)):
     # 입력 레이어
@@ -32,9 +56,11 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
                       kernel_initializer='he_normal')(inputs)
     x = layers.LayerNormalization()(x)
     x = Mish()(x)
+    x = squeeze_excite_block(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 두 번째 합성곱 층 + 맥스풀링 + Batch Normalization
+    x = residual_block(x, 64)
     x = layers.Conv2D(64, (3, 3), padding='same',
                       kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
                       kernel_initializer='he_normal')(x)
@@ -43,19 +69,23 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 세 번째 합성곱 층 + 맥스풀링 + Batch Normalization
+    x = residual_block(x, 128)
     x = layers.Conv2D(128, (3, 3), padding='same',
                       kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
                       kernel_initializer='he_normal')(x)
     x = layers.LayerNormalization()(x)
     x = Mish()(x)
+    x = squeeze_excite_block(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 네 번째 합성곱 층 + 맥스풀링 + Batch Normalization (층을 더 깊게 구성)
+    x = residual_block(x, 256)
     x = layers.Conv2D(256, (3, 3), padding='same',
                       kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
                       kernel_initializer='he_normal')(x)
     x = layers.LayerNormalization()(x)
     x = Mish()(x)
+    x = squeeze_excite_block(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 평탄화 (Flatten) 후 Fully Connected 층
