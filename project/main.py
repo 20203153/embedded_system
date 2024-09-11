@@ -23,6 +23,8 @@ class Mish(layers.Layer):
 
 def residual_block(x, filters):
     shortcut = x
+
+    # 합성곱 층
     x = layers.Conv2D(filters, (3, 3), padding='same', kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)
     x = layers.BatchNormalization()(x)
     x = Mish()(x)
@@ -30,8 +32,14 @@ def residual_block(x, filters):
     x = layers.Conv2D(filters, (3, 3), padding='same', kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)
     x = layers.BatchNormalization()(x)
 
-    x = layers.add([x, shortcut])  # Skip connection
+    # 입력과 출력의 채널 수가 다르면 1x1 합성곱을 사용하여 shortcut을 맞춤
+    if shortcut.shape[-1] != filters:
+        shortcut = layers.Conv2D(filters, (1, 1), padding='same')(shortcut)
+
+    # 스킵 연결
+    x = layers.add([x, shortcut])
     x = Mish()(x)
+
     return x
 
 
