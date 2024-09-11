@@ -15,7 +15,7 @@ def residual_block(x, filters):
     shortcut = x
     x = layers.SeparableConv2D(filters, (3, 3), padding='same')(x)
     x = layers.BatchNormalization()(x)
-    x = keras.activations.leaky_relu(x, alpha=0.1)
+    x = keras.activations.leaky_relu(x, negative_slope=0.1)
 
     if shortcut.shape[-1] != filters:
         shortcut = layers.Conv2D(filters, (1, 1), padding='same')(shortcut)
@@ -42,7 +42,7 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     # 첫 번째 합성곱 층 + 맥스풀링 + Batch Normalization
     x = layers.SeparableConv2D(32, (3, 3), padding='same')(inputs)
     x = layers.LayerNormalization()(x)
-    x = keras.activations.leaky_relu(x, alpha=0.1)
+    x = keras.activations.leaky_relu(x, negative_slope=0.1)
     x = squeeze_excite_block(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
@@ -62,11 +62,11 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     # 평탄화 (Flatten) 후 Fully Connected 층
     x = layers.GlobalAveragePooling2D()(x)
     x = layers.Dense(256, kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)  # 노드를 512로 증가
-    x = keras.activations.leaky_relu(x, alpha=0.1)
+    x = keras.activations.leaky_relu(x, negative_slope=0.1)
     x = layers.Dropout(0.3)(x)  # Dropout 추가
 
     x = layers.Dense(64, kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)
-    x = keras.activations.leaky_relu(x, alpha=0.1)
+    x = keras.activations.leaky_relu(x, negative_slope=0.1)
     x = layers.Dropout(0.3)(x)  # Dropout 추가
 
     # 출력층 (카메라 상하 및 좌우 각도 예측)
