@@ -10,36 +10,18 @@ from keras import layers, models
 from keras.src.callbacks import EarlyStopping, ReduceLROnPlateau
 
 
-# Mish 활성화 함수 직접 구현
-def mish(x):
-    return x * tf.math.tanh(tf.math.softplus(x))
-
-
-# 활성화 함수를 Keras 레이어로 감싸기
-class Mish(layers.Layer):
-    def call(self, inputs):
-        return mish(inputs)
-
-
+# 간소화된 Residual Block 예시
 def residual_block(x, filters):
     shortcut = x
-
-    # 합성곱 층
-    x = layers.Conv2D(filters, (3, 3), padding='same', kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)
+    x = layers.SeparableConv2D(filters, (3, 3), padding='same',
+                               kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)
     x = layers.BatchNormalization()(x)
-    x = Mish()(x)
+    x = keras.activations.leaky_relu(x, alpha=0.1)
 
-    x = layers.Conv2D(filters, (3, 3), padding='same', kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)
-    x = layers.BatchNormalization()(x)
-
-    # 입력과 출력의 채널 수가 다르면 1x1 합성곱을 사용하여 shortcut을 맞춤
     if shortcut.shape[-1] != filters:
         shortcut = layers.Conv2D(filters, (1, 1), padding='same')(shortcut)
 
-    # 스킵 연결
     x = layers.add([x, shortcut])
-    x = Mish()(x)
-
     return x
 
 
@@ -59,22 +41,20 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     inputs = layers.Input(shape=input_shape)
 
     # 첫 번째 합성곱 층 + 맥스풀링 + Batch Normalization
-    x = layers.Conv2D(32, (3, 3), padding='same',
-                      kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
-                      kernel_initializer='he_normal')(inputs)
+    x = layers.SeparableConv2D(32, (3, 3), padding='same',
+                               kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
+                               kernel_initializer='he_normal')(inputs)
     x = layers.LayerNormalization()(x)
-    x = Mish()(x)
+    x = keras.activations.leaky_relu(x, alpha=0.1)
     x = squeeze_excite_block(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 두 번째 합성곱 층 + 맥스풀링 + Batch Normalization
     x = residual_block(x, 64)
-    x = squeeze_excite_block(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 세 번째 합성곱 층 + 맥스풀링 + Batch Normalization
     x = residual_block(x, 128)
-    x = squeeze_excite_block(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 네 번째 합성곱 층 + 맥스풀링 + Batch Normalization (층을 더 깊게 구성)
@@ -84,16 +64,12 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
 
     # 평탄화 (Flatten) 후 Fully Connected 층
     x = layers.GlobalAveragePooling2D()(x)
-    x = layers.Dense(512, kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)  # 노드를 512로 증가
-    x = Mish()(x)
+    x = layers.Dense(256, kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)  # 노드를 512로 증가
+    x = keras.activations.leaky_relu(x, alpha=0.1)
     x = layers.Dropout(0.3)(x)  # Dropout 추가
 
-    x = layers.Dense(128, kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)
-    x = Mish()(x)
-    x = layers.Dropout(0.3)(x)  # Dropout 추가
-
-    x = layers.Dense(32, kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)
-    x = Mish()(x)
+    x = layers.Dense(64, kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)
+    x = keras.activations.leaky_relu(x, alpha=0.1)
     x = layers.Dropout(0.3)(x)  # Dropout 추가
 
     # 출력층 (카메라 상하 및 좌우 각도 예측)
@@ -268,7 +244,8 @@ if __name__ == '__main__':
     test_empty_folder = './data/test/empty'
 
     # 데이터셋 로드
-    train_images, train_labels, test_images, test_labels = load_dataset(train_csv, train_folder, empty_folder, test_csv, test_folder, test_empty_folder)
+    train_images, train_labels, test_images, test_labels = load_dataset(train_csv, train_folder, empty_folder, test_csv,
+                                                                        test_folder, test_empty_folder)
 
     print(f"Loaded: {len(train_images)} training images, {len(test_images)} testing images")
 
