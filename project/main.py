@@ -13,8 +13,7 @@ from keras.src.callbacks import EarlyStopping, ReduceLROnPlateau
 # 간소화된 Residual Block 예시
 def residual_block(x, filters):
     shortcut = x
-    x = layers.SeparableConv2D(filters, (3, 3), padding='same',
-                               kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)
+    x = layers.SeparableConv2D(filters, (3, 3), padding='same', kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)
     x = layers.BatchNormalization()(x)
     x = keras.activations.leaky_relu(x, alpha=0.1)
 
@@ -41,9 +40,7 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
     inputs = layers.Input(shape=input_shape)
 
     # 첫 번째 합성곱 층 + 맥스풀링 + Batch Normalization
-    x = layers.SeparableConv2D(32, (3, 3), padding='same',
-                               kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
-                               kernel_initializer='he_normal')(inputs)
+    x = layers.SeparableConv2D(32, (3, 3), padding='same', kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(inputs)
     x = layers.LayerNormalization()(x)
     x = keras.activations.leaky_relu(x, alpha=0.1)
     x = squeeze_excite_block(x)
