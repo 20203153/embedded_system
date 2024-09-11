@@ -34,43 +34,41 @@ def squeeze_excite_block(input, ratio=16):
     return x
 
 
-# 모델 정의 (이미지 -> 카메라 각도 예측 모델)
 def build_camera_control_model(input_shape=(128, 128, 1)):
-    # 입력 레이어
     inputs = layers.Input(shape=input_shape)
 
-    # 첫 번째 합성곱 층 + 맥스풀링 + Batch Normalization
-    x = layers.SeparableConv2D(32, (3, 3), padding='same')(inputs)
-    x = layers.LayerNormalization()(x)
+    # 첫 번째 합성곱 층 + Attention Mechanism
+    x = layers.Conv2D(32, (3, 3), padding='same')(inputs)
+    x = layers.BatchNormalization()(x)
     x = keras.activations.leaky_relu(x, negative_slope=0.1)
     x = squeeze_excite_block(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
-    # 두 번째 합성곱 층 + 맥스풀링 + Batch Normalization
+    # 두 번째 합성곱 층 + Residual Block + Attention Mechanism
     x = residual_block(x, 64)
     x = layers.MaxPooling2D((2, 2))(x)
 
-    # 세 번째 합성곱 층 + 맥스풀링 + Batch Normalization
+    # 세 번째 합성곱 층 + Residual Block
     x = residual_block(x, 128)
     x = layers.MaxPooling2D((2, 2))(x)
 
-    # 네 번째 합성곱 층 + 맥스풀링 + Batch Normalization (층을 더 깊게 구성)
+    # 네 번째 합성곱 층 + Attention Mechanism
     x = residual_block(x, 256)
     x = squeeze_excite_block(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
-    # 평탄화 (Flatten) 후 Fully Connected 층
+    # Global Average Pooling 이후
     x = layers.GlobalAveragePooling2D()(x)
-    x = layers.Dense(256, kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)  # 노드를 512로 증가
+    x = layers.Dense(128, kernel_regularizer=keras.regularizers.l2(0.0001))(x)  # Dense 레이어 크기 축소
     x = keras.activations.leaky_relu(x, negative_slope=0.1)
-    x = layers.Dropout(0.3)(x)  # Dropout 추가
+    x = layers.Dropout(0.3)(x)
 
-    x = layers.Dense(64, kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)
+    x = layers.Dense(32, kernel_regularizer=keras.regularizers.l2(0.0001))(x)
     x = keras.activations.leaky_relu(x, negative_slope=0.1)
-    x = layers.Dropout(0.3)(x)  # Dropout 추가
+    x = layers.Dropout(0.3)(x)
 
     # 출력층 (카메라 상하 및 좌우 각도 예측)
-    outputs = layers.Dense(2, activation='tanh', kernel_regularizer=keras.regularizers.l2(0.001))(x)
+    outputs = layers.Dense(2, activation='tanh')(x)
 
     model = models.Model(inputs=inputs, outputs=outputs)
     return model
