@@ -10,6 +10,17 @@ from keras import layers, models
 from keras.src.callbacks import EarlyStopping, ReduceLROnPlateau
 
 
+# Mish 활성화 함수 직접 구현
+def mish(x):
+    return x * tf.math.tanh(tf.math.softplus(x))
+
+
+# 활성화 함수를 Keras 레이어로 감싸기
+class Mish(layers.Layer):
+    def call(self, inputs):
+        return mish(inputs)
+
+
 # 모델 정의 (이미지 -> 카메라 각도 예측 모델)
 def build_camera_control_model(input_shape=(128, 128, 1)):
     # 입력 레이어
@@ -20,7 +31,7 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
                       kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
                       kernel_initializer='he_normal')(inputs)
     x = layers.BatchNormalization()(x)
-    x = keras.activations.mish(x)
+    x = Mish()(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 두 번째 합성곱 층 + 맥스풀링 + Batch Normalization
@@ -28,7 +39,7 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
                       kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
                       kernel_initializer='he_normal')(x)
     x = layers.BatchNormalization()(x)
-    x = keras.activations.mish(x)
+    x = Mish()(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 세 번째 합성곱 층 + 맥스풀링 + Batch Normalization
@@ -36,7 +47,7 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
                       kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
                       kernel_initializer='he_normal')(x)
     x = layers.BatchNormalization()(x)
-    x = keras.activations.mish(x)
+    x = Mish()(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 네 번째 합성곱 층 + 맥스풀링 + Batch Normalization (층을 더 깊게 구성)
@@ -44,21 +55,21 @@ def build_camera_control_model(input_shape=(128, 128, 1)):
                       kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001),
                       kernel_initializer='he_normal')(x)
     x = layers.BatchNormalization()(x)
-    x = keras.activations.mish(x)
+    x = Mish()(x)
     x = layers.MaxPooling2D((2, 2))(x)
 
     # 평탄화 (Flatten) 후 Fully Connected 층
     x = layers.GlobalAveragePooling2D()(x)
     x = layers.Dense(512, kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)  # 노드를 512로 증가
-    x = keras.activations.mish(x)
+    x = Mish()(x)
     x = layers.Dropout(0.3)(x)  # Dropout 추가
 
     x = layers.Dense(128, kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)
-    x = keras.activations.mish(x)
+    x = Mish()(x)
     x = layers.Dropout(0.3)(x)  # Dropout 추가
 
     x = layers.Dense(32, kernel_regularizer=keras.regularizers.l1_l2(0.001, 0.001))(x)
-    x = keras.activations.mish(x)
+    x = Mish()(x)
     x = layers.Dropout(0.3)(x)  # Dropout 추가
 
     # 출력층 (카메라 상하 및 좌우 각도 예측)
