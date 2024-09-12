@@ -34,7 +34,7 @@ def squeeze_excite_block(input, ratio=16):
     return x
 
 
-def build_camera_control_model(input_shape=(128, 128, 1)):
+def build_camera_control_model(input_shape=(128, 128, 3)):  # (128, 128, 3) 컬러 이미지 입력
     inputs = layers.Input(shape=input_shape)
 
     # 첫 번째 합성곱 층 + Attention Mechanism
@@ -87,13 +87,12 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128))
         x, y = row['x'], row['y']
 
         img_path = str(os.path.join(image_folder, image_file))
-        img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+        img = cv2.imread(img_path, cv2.IMREAD_COLOR)  # 컬러 이미지로 로드
         if img is None:
             print(f"Unable to load image: {img_path}")
             continue
 
         img = cv2.resize(img, img_size)
-        img = np.expand_dims(img, axis=-1)  # (128, 128, 1)
 
         # 좌표 정규화 (0~128 사이 값을 -1~1 사이로 변환)
         norm_x = (x / img_size[0]) * 2 - 1
@@ -105,13 +104,12 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128))
     # 공이 없는 이미지에 대해서는 (0, 0)을 라벨로 할당
     for empty_file in os.listdir(empty_folder):
         empty_img_path = str(os.path.join(empty_folder, empty_file))
-        img = cv2.imread(empty_img_path, cv2.IMREAD_GRAYSCALE)
+        img = cv2.imread(empty_img_path, cv2.IMREAD_COLOR)  # 공이 없는 이미지도 컬러로 로드
         if img is None:
             print(f"Unable to load image: {empty_img_path}")
             continue
 
         img = cv2.resize(img, img_size)
-        img = np.expand_dims(img, axis=-1)  # (128, 128, 1)
 
         images.append(img)
         labels.append([0, 0])  # 공이 없을 때는 (0, 0) 출력
@@ -209,11 +207,8 @@ def train_camera_control_model(train_images, train_labels, test_images, test_lab
 
 # 이미지에 예측된 위치와 목표 위치를 그려서 저장하는 함수
 def save_result_image(state, predicted_action, target_action, episode, save_dir):
-    # 이미지를 (128, 128, 1) -> (128, 128)로 변환
-    img = state.squeeze()
-
-    # 그레이스케일 이미지를 컬러 이미지로 변환 (BGR 채널로)
-    img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    # 이미지를 (128, 128, 3) -> (128, 128)로 변환
+    img = state
 
     # 예측된 좌표와 목표 좌표를 실제 이미지 크기에 맞게 변환 ([-1, 1] 범위를 [0, 128]로 변환)
     predicted_x = int((predicted_action[0] + 1) * 64)
@@ -222,14 +217,14 @@ def save_result_image(state, predicted_action, target_action, episode, save_dir)
     target_y = int((target_action[1] + 1) * 64)
 
     # 예측된 위치를 빨간색 원으로 표시
-    cv2.circle(img_color, (predicted_x, predicted_y), 5, (0, 0, 255), -1)  # 빨간색 원: 예측 위치
+    cv2.circle(img, (predicted_x, predicted_y), 5, (0, 0, 255), -1)  # 빨간색 원: 예측 위치
 
     # 목표 위치를 초록색 원으로 표시
-    cv2.circle(img_color, (target_x, target_y), 5, (0, 255, 0), -1)  # 초록색 원: 목표 위치
+    cv2.circle(img, (target_x, target_y), 5, (0, 255, 0), -1)  # 초록색 원: 목표 위치
 
     # 이미지 파일로 저장
     image_path = os.path.join(save_dir, f"episode_{episode}.png")
-    cv2.imwrite(image_path, img_color)
+    cv2.imwrite(image_path, img)
     print(f"Saved image for episode {episode} to {image_path}")
 
 
