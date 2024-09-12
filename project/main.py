@@ -7,7 +7,7 @@ import numpy as np
 import tensorflow as tf
 
 from keras import layers, models
-from keras.src.callbacks import EarlyStopping, ReduceLROnPlateau
+from keras.src.callbacks import EarlyStopping
 
 
 # 간소화된 Residual Block 예시
@@ -178,18 +178,21 @@ def train_camera_control_model(train_images, train_labels, test_images, test_lab
                                results_dir="./results"):
     model = build_camera_control_model()
 
+    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+        initial_learning_rate=1e-4,
+        decay_steps=10000,
+        decay_rate=0.9)
+
     # 모델 컴파일
-    model.compile(optimizer=keras.optimizers.AdamW(1e-4, clipnorm=1.0), loss='mean_squared_error', metrics=['mae'])
+    model.compile(optimizer=keras.optimizers.AdamW(lr_schedule, clipnorm=1.0), loss='mean_squared_error', metrics=['mae'])
 
     model.summary()
 
     early_stopping = EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True)
-    reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6)
-
     # 모델 학습
     history = model.fit(
         train_images, train_labels, validation_data=(test_images, test_labels),
-        epochs=epochs, batch_size=batch_size, callbacks=[early_stopping, reduce_lr],
+        epochs=epochs, batch_size=batch_size, callbacks=[early_stopping],
         shuffle=True
     )
 
