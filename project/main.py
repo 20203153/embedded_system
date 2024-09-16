@@ -202,10 +202,10 @@ def train_camera_control_model(model, train_loader, val_loader, device, epochs=5
 
 if __name__ == "__main__":
     train_csv = './data/train_labels.csv'
-    train_folder = './data/train/augmented'
+    train_folder = './data/train/balls'
     empty_folder = './data/train/empty'
     test_csv = './data/test_labels.csv'
-    test_folder = './data/test/augmented'
+    test_folder = './data/test/balls'
     test_empty_folder = './data/test/empty'
 
     # 데이터셋 로드
