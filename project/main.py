@@ -41,7 +41,9 @@ class SqueezeExcitationBlock(nn.Module):
 
     def forward(self, x):
         batch_size, channels, _, _ = x.size()
-        out = F.avg_pool2d(x, x.size(2)).view(batch_size, channels)
+        # kernel_size를 명시적으로 (H, W)로 설정
+        kernel_size = (x.size(2), x.size(3))
+        out = F.avg_pool2d(x, kernel_size).view(batch_size, channels)
         out = F.relu(self.fc1(out))
         out = torch.sigmoid(self.fc2(out)).view(batch_size, channels, 1, 1)
         return x * out
