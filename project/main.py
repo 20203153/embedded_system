@@ -156,7 +156,29 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128))
     return np.array(images), np.array(labels)
 
 
-def train_camera_control_model(model, train_loader, val_loader, device, epochs=50, model_save_path='./model'):
+# 이미지 저장 함수
+def save_result_image(image, predicted, target, idx, save_dir='./results'):
+    img = image.permute(1, 2, 0).cpu().numpy()  # 이미지 채널 순서 변경 및 CPU로 이동
+    img = (img * 255).astype(np.uint8)  # 이미지를 [0, 255]로 스케일링
+
+    # 예측된 좌표와 실제 좌표를 (0~128) 크기로 변환
+    pred_x = int((predicted[0] + 1) * 64)
+    pred_y = int((predicted[1] + 1) * 64)
+    target_x = int((target[0] + 1) * 64)
+    target_y = int((target[1] + 1) * 64)
+
+    # 예측 좌표 (빨간색) 및 실제 좌표 (초록색) 표시
+    img = cv2.circle(img, (pred_x, pred_y), 5, (0, 0, 255), -1)
+    img = cv2.circle(img, (target_x, target_y), 5, (0, 255, 0), -1)
+
+    # 이미지 저장 경로
+    os.makedirs(save_dir, exist_ok=True)
+    img_path = os.path.join(save_dir, f"result_{idx}.png")
+    cv2.imwrite(img_path, img)
+    print(f"Result image saved: {img_path}")
+
+
+def train_camera_control_model(model, train_loader, val_loader, device, epochs=50, model_save_path='./model', results_dir='./results'):
     model.to(device)
     optimizer = optim.AdamW(model.parameters(), lr=1e-4)
     criterion = nn.MSELoss()
@@ -187,6 +209,13 @@ def train_camera_control_model(model, train_loader, val_loader, device, epochs=5
 
         print(
             f"Epoch [{epoch + 1}/{epochs}], Loss: {running_loss / len(train_loader):.4f}, Val Loss: {val_loss / len(val_loader):.4f}")
+
+        # Epoch이 끝날 때마다 검증 데이터에서 예측 결과 저장
+        for idx, (images, labels) in enumerate(val_loader):
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            for i in range(images.size(0)):  # 배치 내 각 이미지에 대해 결과 저장
+                save_result_image(images[i], outputs[i], labels[i], idx * len(images) + i, save_dir=results_dir)
 
     # 모델 저장 경로 생성
     os.makedirs(model_save_path, exist_ok=True)
