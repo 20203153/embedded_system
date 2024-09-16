@@ -1,11 +1,13 @@
 import cv2
 import os
 import tkinter as tk
+import numpy as np
 from tkinter import filedialog
 import pandas as pd
 
 # 전역 변수로 클릭한 좌표 저장
 click_coordinates = []
+
 
 # 클릭 이벤트 함수 (최종 클릭된 좌표만 저장)
 def click_event(event, x, y, flags, param):
@@ -18,6 +20,7 @@ def click_event(event, x, y, flags, param):
         # 클릭한 위치에 원 그리기
         cv2.circle(param, (x, y), 5, (0, 255, 0), -1)
         cv2.imshow("Image", param)
+
 
 # 이미지 증강 함수 (모든 가능한 증강 적용)
 def augment_image(image):
@@ -46,10 +49,12 @@ def augment_image(image):
 
     return augmented_images
 
+
 # 파일명에서 확장자를 분리하고 증강된 파일 이름을 생성
 def get_augmented_filename(filename, idx):
     name, ext = os.path.splitext(filename)  # 파일 이름과 확장자 분리
     return f"{name}_aug{idx}{ext}"  # 확장자 포함해서 증강된 파일 이름 생성
+
 
 # 이미지를 선택하고 좌표를 저장하는 GUI 함수
 def label_images():
@@ -86,11 +91,15 @@ def label_images():
         augmented_images = augment_image(img)
 
         for i, aug_img in enumerate(augmented_images):
+            # 증강된 이미지 저장
+            aug_img_filename = get_augmented_filename(image_file, i)
+            cv2.imwrite(os.path.join(folder_selected, aug_img_filename), aug_img)
+
             # 이미지 윈도우 생성 및 이벤트 설정
             cv2.imshow("Image", aug_img)
             cv2.setMouseCallback("Image", click_event, aug_img)
 
-            print(f"Label the augmented image: {get_augmented_filename(image_file, i)}")
+            print(f"Label the augmented image: {aug_img_filename}")
             click_coordinates = []  # 클릭 좌표 초기화
 
             # 's' 키를 눌러 저장, 'n' 키를 눌러 건너뜀
@@ -98,11 +107,11 @@ def label_images():
                 key = cv2.waitKey(0) & 0xFF
                 if key == ord('s') and click_coordinates:
                     # 좌표를 CSV로 저장 (증강된 이미지와 함께)
-                    labeled_data.append([get_augmented_filename(image_file, i), click_coordinates[0][0], click_coordinates[0][1]])
-                    print(f"Coordinates saved for {get_augmented_filename(image_file, i)}: {click_coordinates[0]}")
+                    labeled_data.append([aug_img_filename, click_coordinates[0][0], click_coordinates[0][1]])
+                    print(f"Coordinates saved for {aug_img_filename}: {click_coordinates[0]}")
                     break
                 elif key == ord('n'):
-                    print(f"Skipped {get_augmented_filename(image_file, i)}")
+                    print(f"Skipped {aug_img_filename}")
                     break
 
             # 진행률 계산 및 출력

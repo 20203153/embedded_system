@@ -1,80 +1,119 @@
-import cv2
 import os
-
-import keras
+import cv2
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
 import pandas as pd
 import numpy as np
-import tensorflow as tf
-
-from keras import layers, models
-from keras.src.callbacks import EarlyStopping
-
-
-# 간소화된 Residual Block 예시
-def residual_block(x, filters):
-    shortcut = x
-    x = layers.SeparableConv2D(filters, (3, 3), padding='same')(x)
-    x = layers.BatchNormalization()(x)
-    x = keras.activations.leaky_relu(x, negative_slope=0.1)
-
-    if shortcut.shape[-1] != filters:
-        shortcut = layers.Conv2D(filters, (1, 1), padding='same')(shortcut)
-
-    x = layers.add([x, shortcut])
-    return x
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
+from sklearn.model_selection import train_test_split
 
 
-def squeeze_excite_block(input, ratio=16):
-    filters = input.shape[-1]  # 채널 수
-    se = layers.GlobalAveragePooling2D()(input)
-    se = layers.Dense(filters // ratio, activation='relu')(se)
-    se = layers.Dense(filters, activation='sigmoid')(se)
-    se = layers.Reshape((1, 1, filters))(se)
-    x = layers.multiply([input, se])
-    return x
+# Residual Block
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+
+        self.shortcut = nn.Sequential()
+        if in_channels != out_channels:
+            self.shortcut = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
+
+    def forward(self, x):
+        out = F.leaky_relu(self.bn1(self.conv1(x)), negative_slope=0.1)
+        out = self.bn2(self.conv2(out))
+        out += self.shortcut(x)
+        out = F.leaky_relu(out, negative_slope=0.1)
+        return out
 
 
-def build_camera_control_model(input_shape=(128, 128, 3)):  # (128, 128, 3) 컬러 이미지 입력
-    inputs = layers.Input(shape=input_shape)
+# Squeeze-and-Excitation Block
+class SqueezeExcitationBlock(nn.Module):
+    def __init__(self, in_channels, ratio=16):
+        super(SqueezeExcitationBlock, self).__init__()
+        self.fc1 = nn.Linear(in_channels, in_channels // ratio)
+        self.fc2 = nn.Linear(in_channels // ratio, in_channels)
 
-    # 첫 번째 합성곱 층 + Attention Mechanism
-    x = layers.Conv2D(32, (3, 3), padding='same')(inputs)
-    x = layers.BatchNormalization()(x)
-    x = keras.activations.leaky_relu(x, negative_slope=0.1)
-    x = squeeze_excite_block(x)
-    x = layers.MaxPooling2D((2, 2))(x)
-
-    # 두 번째 합성곱 층 + Residual Block + Attention Mechanism
-    x = residual_block(x, 64)
-    x = layers.MaxPooling2D((2, 2))(x)
-
-    # 세 번째 합성곱 층 + Residual Block
-    x = residual_block(x, 128)
-    x = layers.MaxPooling2D((2, 2))(x)
-
-    # 네 번째 합성곱 층 + Attention Mechanism
-    x = residual_block(x, 256)
-    x = squeeze_excite_block(x)
-    x = layers.MaxPooling2D((2, 2))(x)
-
-    # Global Average Pooling 이후
-    x = layers.GlobalAveragePooling2D()(x)
-    x = layers.Dense(128, kernel_regularizer=keras.regularizers.l2(0.0001))(x)  # Dense 레이어 크기 축소
-    x = keras.activations.leaky_relu(x, negative_slope=0.1)
-    x = layers.Dropout(0.3)(x)
-
-    x = layers.Dense(32, kernel_regularizer=keras.regularizers.l2(0.0001))(x)
-    x = keras.activations.leaky_relu(x, negative_slope=0.1)
-    x = layers.Dropout(0.3)(x)
-
-    # 출력층 (카메라 상하 및 좌우 각도 예측)
-    outputs = layers.Dense(2, activation='tanh')(x)
-
-    model = models.Model(inputs=inputs, outputs=outputs)
-    return model
+    def forward(self, x):
+        batch_size, channels, _, _ = x.size()
+        out = F.avg_pool2d(x, x.size(2)).view(batch_size, channels)
+        out = F.relu(self.fc1(out))
+        out = torch.sigmoid(self.fc2(out)).view(batch_size, channels, 1, 1)
+        return x * out
 
 
-# CSV 파일에서 라벨링된 데이터를 로드하는 함수
+# Camera Control Model
+class CameraControlModel(nn.Module):
+    def __init__(self):
+        super(CameraControlModel, self).__init__()
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.se1 = SqueezeExcitationBlock(32)
+        self.pool1 = nn.MaxPool2d(2)
+
+        self.res2 = ResidualBlock(32, 64)
+        self.pool2 = nn.MaxPool2d(2)
+
+        self.res3 = ResidualBlock(64, 128)
+        self.pool3 = nn.MaxPool2d(2)
+
+        self.res4 = ResidualBlock(128, 256)
+        self.se2 = SqueezeExcitationBlock(256)
+        self.pool4 = nn.MaxPool2d(2)
+
+        self.global_avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc1 = nn.Linear(256, 128)
+        self.fc2 = nn.Linear(128, 32)
+        self.fc_out = nn.Linear(32, 2)
+
+    def forward(self, x):
+        x = F.leaky_relu(self.bn1(self.conv1(x)), negative_slope=0.1)
+        x = self.se1(x)
+        x = self.pool1(x)
+
+        x = self.res2(x)
+        x = self.pool2(x)
+
+        x = self.res3(x)
+        x = self.pool3(x)
+
+        x = self.res4(x)
+        x = self.se2(x)
+        x = self.pool4(x)
+
+        x = self.global_avg_pool(x)
+        x = x.view(x.size(0), -1)
+        x = F.leaky_relu(self.fc1(x), negative_slope=0.1)
+        x = F.dropout(x, 0.3)
+        x = F.leaky_relu(self.fc2(x), negative_slope=0.1)
+        x = F.dropout(x, 0.3)
+        x = torch.tanh(self.fc_out(x))
+        return x
+
+
+# Custom Dataset
+class CameraControlDataset(Dataset):
+    def __init__(self, images, labels, transform=None):
+        self.images = images
+        self.labels = labels
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        image = self.images[idx]
+        label = self.labels[idx]
+        if self.transform:
+            image = self.transform(image)
+        return image, torch.tensor(label, dtype=torch.float32)
+
+
 def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128)):
     labeled_data = pd.read_csv(csv_path)
 
@@ -93,12 +132,11 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128))
             continue
 
         img = cv2.resize(img, img_size)
+        images.append(img)
 
         # 좌표 정규화 (0~128 사이 값을 -1~1 사이로 변환)
         norm_x = (x / img_size[0]) * 2 - 1
         norm_y = (y / img_size[1]) * 2 - 1
-
-        images.append(img)
         labels.append([norm_x, norm_y])
 
     # 공이 없는 이미지에 대해서는 (0, 0)을 라벨로 할당
@@ -110,127 +148,59 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128))
             continue
 
         img = cv2.resize(img, img_size)
-
         images.append(img)
         labels.append([0, 0])  # 공이 없을 때는 (0, 0) 출력
 
     return np.array(images), np.array(labels)
 
 
-# 데이터셋 로드 함수
-def load_dataset(train_csv, train_folder, empty_folder, test_csv, test_folder, test_empty_folder, img_size=(128, 128)):
-    # 학습 데이터 로드 (공이 있는 데이터와 없는 데이터 함께)
-    train_images, train_labels = load_labeled_data(train_csv, train_folder, empty_folder, img_size)
+def train_camera_control_model(model, train_loader, val_loader, device, epochs=50, model_save_path='./model'):
+    model.to(device)
+    optimizer = optim.AdamW(model.parameters(), lr=1e-4)
+    criterion = nn.MSELoss()
 
-    # 테스트 데이터 로드 (공이 있는 데이터만)
-    test_images, test_labels = load_labeled_data(test_csv, test_folder, test_empty_folder, img_size)
+    for epoch in range(epochs):
+        model.train()
+        running_loss = 0.0
+        for images, labels in train_loader:
+            images, labels = images.to(device), labels.to(device)
 
-    return train_images, train_labels, test_images, test_labels
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
 
+            running_loss += loss.item()
 
-# 테스트 데이터에 대해 예측을 수행하고, 그림을 저장하는 함수
-def test_and_save_results(model, test_images, test_labels, save_dir="./results"):
-    os.makedirs(save_dir, exist_ok=True)
+        # Validation
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for images, labels in val_loader:
+                images, labels = images.to(device), labels.to(device)
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+                val_loss += loss.item()
 
-    # 테스트 데이터에 대해 예측 수행
-    predictions = model.predict(test_images)
+        print(
+            f"Epoch [{epoch + 1}/{epochs}], Loss: {running_loss / len(train_loader):.4f}, Val Loss: {val_loss / len(val_loader):.4f}")
 
-    for i, (image, predicted_action, target_action) in enumerate(zip(test_images, predictions, test_labels)):
-        # 결과 이미지를 저장
-        save_result_image(image, predicted_action, target_action, i + 1, save_dir)
+    # 모델 저장 경로 생성
+    os.makedirs(model_save_path, exist_ok=True)
 
-    print(f"All results saved to {save_dir}")
+    # 학습 완료 후 모델을 ONNX 형식으로 저장
+    onnx_path = os.path.join(model_save_path, 'camera_control_model.onnx')
 
-    # TensorFlow Lite Converter 사용
-    converter = tf.lite.TFLiteConverter.from_keras_model(model)
+    # 데이터셋에서 하나의 샘플을 사용해 ONNX로 변환
+    sample_img, _ = next(iter(train_loader))  # 첫 번째 배치에서 샘플 가져옴
+    sample_img = sample_img[0:1].to(device)  # 배치에서 첫 이미지만 사용
 
-    # 양자화 옵션 설정
-    converter.optimizations = [tf.lite.Optimize.DEFAULT]
-
-    # 대표 데이터셋 설정 (float32 -> int8 양자화에 사용)
-    def representative_data_gen():
-        for input_value in tf.data.Dataset.from_tensor_slices(train_images).batch(1).take(100):  # 데이터셋의 일부를 사용
-            yield [input_value.numpy().astype(np.float32)]  # float32로 입력
-
-    # 대표 데이터셋을 양자화에 사용
-    converter.representative_dataset = representative_data_gen
-
-    # 입력 및 출력 타입을 uint8로 설정 (EdgeTPU에서 필요)
-    converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
-    converter.inference_input_type = tf.uint8  # 입력을 uint8로 설정
-    converter.inference_output_type = tf.uint8  # 출력을 uint8로 설정
-
-    # 모델을 TensorFlow Lite로 변환
-    tflite_model = converter.convert()
-
-    # 변환된 모델 저장
-    with open('model_quantized.tflite', 'wb') as f:
-        f.write(tflite_model)
-
-    print("TensorFlow Lite model has been saved as 'model_quantized.tflite'")
+    torch.onnx.export(model, sample_img, onnx_path, opset_version=11)
+    print(f"Model saved as ONNX format at: {onnx_path}")
 
 
-# 학습 함수
-def train_camera_control_model(train_images, train_labels, test_images, test_labels,
-                               model_save_path="./models/final_model.h5", batch_size=32, epochs=500,
-                               results_dir="./results"):
-    model = build_camera_control_model()
-
-    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate=1e-4,
-        decay_steps=10000,
-        decay_rate=0.9)
-
-    # 모델 컴파일
-    model.compile(optimizer=keras.optimizers.AdamW(lr_schedule, clipnorm=1.0), loss='mean_squared_error', metrics=['mae'])
-
-    model.summary()
-
-    early_stopping = EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True)
-    # 모델 학습
-    history = model.fit(
-        train_images, train_labels, validation_data=(test_images, test_labels),
-        epochs=epochs, batch_size=batch_size, callbacks=[early_stopping],
-        shuffle=True
-    )
-
-    # 학습 완료 후 모델 저장
-    os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
-    model.save(model_save_path)
-    print(f"Final model saved to {model_save_path}")
-
-    # 테스트 데이터에 대해 예측을 수행하고 결과 저장
-    test_and_save_results(model, test_images, test_labels, save_dir=results_dir)
-
-    return model, history
-
-
-# 이미지에 예측된 위치와 목표 위치를 그려서 저장하는 함수
-def save_result_image(state, predicted_action, target_action, episode, save_dir):
-    # 이미지를 (128, 128, 3) -> (128, 128)로 변환
-    img = state
-
-    # 예측된 좌표와 목표 좌표를 실제 이미지 크기에 맞게 변환 ([-1, 1] 범위를 [0, 128]로 변환)
-    predicted_x = int((predicted_action[0] + 1) * 64)
-    predicted_y = int((predicted_action[1] + 1) * 64)
-    target_x = int((target_action[0] + 1) * 64)
-    target_y = int((target_action[1] + 1) * 64)
-
-    # 예측된 위치를 빨간색 원으로 표시
-    cv2.circle(img, (predicted_x, predicted_y), 5, (0, 0, 255), -1)  # 빨간색 원: 예측 위치
-
-    # 목표 위치를 초록색 원으로 표시
-    cv2.circle(img, (target_x, target_y), 5, (0, 255, 0), -1)  # 초록색 원: 목표 위치
-
-    # 이미지 파일로 저장
-    image_path = os.path.join(save_dir, f"episode_{episode}.png")
-    cv2.imwrite(image_path, img)
-    print(f"Saved image for episode {episode} to {image_path}")
-
-
-# 메인 실행 함수
-if __name__ == '__main__':
-    # 학습 및 테스트 데이터 경로 설정
+if __name__ == "__main__":
     train_csv = './data/train_labels.csv'
     train_folder = './data/train/augmented'
     empty_folder = './data/train/empty'
@@ -239,13 +209,31 @@ if __name__ == '__main__':
     test_empty_folder = './data/test/empty'
 
     # 데이터셋 로드
-    train_images, train_labels, test_images, test_labels = load_dataset(train_csv, train_folder, empty_folder, test_csv,
-                                                                        test_folder, test_empty_folder)
+    train_images, train_labels = load_labeled_data(train_csv, train_folder, empty_folder)
+    test_images, test_labels = load_labeled_data(test_csv, test_folder, test_empty_folder)
 
-    print(f"Loaded: {len(train_images)} training images, {len(test_images)} testing images")
+    # 이미지 전처리 (PyTorch 텐서 변환)
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+    ])
 
-    # 모델 학습
-    print("Starting training...")
-    model, history = train_camera_control_model(train_images, train_labels, test_images, test_labels)
+    # 데이터셋 및 데이터 로더 생성
+    train_dataset = CameraControlDataset(train_images, train_labels, transform=transform)
+    test_dataset = CameraControlDataset(test_images, test_labels, transform=transform)
 
-    print("Training complete!")
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    val_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+
+    # MPS 디바이스 확인 및 설정
+    if torch.backends.mps.is_available():
+        device = torch.device("mps")
+        print("Using MPS device for training.")
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using {device} for training.")
+
+    # 모델 초기화
+    model = CameraControlModel()
+
+    # 모델 학습 및 ONNX로 저장
+    train_camera_control_model(model, train_loader, val_loader, device, epochs=50, model_save_path='./model')
