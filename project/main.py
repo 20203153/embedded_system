@@ -213,10 +213,10 @@ def train_camera_control_model(model, train_loader, val_loader, device, epochs=5
 
     # 모든 Epoch이 끝날 때 검증 데이터에서 예측 결과 저장
     for idx, (images, labels) in enumerate(val_loader):
-        images, labels = images.to(device), labels.to(device)
-        outputs = model(images)
-        for i in range(images.size(0)):  # 배치 내 각 이미지에 대해 결과 저장
-            save_result_image(images[i], outputs[i], labels[i], idx * len(images) + i, save_dir=results_dir)
+        image, label = images.to(device), labels.to(device)
+        output = model(image)
+        for i in range(image.size(0)):  # 배치 내 각 이미지에 대해 결과 저장
+            save_result_image(image[i], output[i], label[i], idx * len(images) + i, save_dir=results_dir)
 
     # 모델 저장 경로 생성
     os.makedirs(model_save_path, exist_ok=True)
