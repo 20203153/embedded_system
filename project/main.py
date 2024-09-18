@@ -134,7 +134,7 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128))
             print(f"Unable to load image: {img_path}")
             continue
 
-        img = cv2.resize(img, img_size)
+        img = np.array(cv2.resize(img, img_size), dtype=np.float32)
         img = img / 255.0  # [0, 255] 범위의 이미지를 [0, 1] 범위로 정규화
         img = np.transpose(img, (2, 0, 1))  # OpenCV는 (H, W, C)이므로, (C, H, W)로 변경
         images.append(img)
@@ -152,15 +152,11 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128))
             print(f"Unable to load image: {empty_img_path}")
             continue
 
-        img = cv2.resize(img, img_size)
+        img = np.array(cv2.resize(img, img_size), dtype=np.float32)
         img = img / 255.0  # [0, 255] 범위의 이미지를 [0, 1] 범위로 정규화
         img = np.transpose(img, (2, 0, 1))  # OpenCV는 (H, W, C)이므로, (C, H, W)로 변경
         images.append(img)
         labels.append([0, 0])  # 공이 없을 때는 (0, 0) 출력
-
-    # numpy 배열을 torch.Tensor로 변환
-    images = torch.tensor(images, dtype=torch.float32)
-    labels = torch.tensor(labels, dtype=torch.float32)
 
     return images, labels
 
