@@ -162,7 +162,9 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128))
 # 이미지 저장 함수
 def save_result_image(image, predicted, target, idx, save_dir='./results'):
     # 이미지를 numpy 형식으로 변환
-    img = image.permute(1, 2, 0).cpu().numpy()  # (C, H, W) -> (H, W, C)로 순서 변경 및 CPU로 이동
+    img: ndarray = image.cpu().numpy()  # (C, H, W) -> (H, W, C)로 순서 변경 및 CPU로 이동
+
+    print(img.shape)
 
     # 이미지를 [0, 255]로 스케일링하고, np.uint8로 변환
     img = (img * 255).astype(np.uint8)
