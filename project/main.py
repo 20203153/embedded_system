@@ -159,7 +159,7 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128))
 # 이미지 저장 함수
 def save_result_image(image, predicted, target, idx, save_dir='./results'):
     # 이미지를 (C, H, W)에서 (H, W, C)로 변환하고 CPU로 이동
-    img = image.permute(1, 2, 0).cpu().numpy()  # 이미지 채널 순서 변경 및 CPU로 이동
+    img = image.cpu().numpy()  # 이미지 채널 순서 변경 및 CPU로 이동
     img = (img * 255).astype(np.uint8)  # 이미지를 [0, 255]로 스케일링
 
     # 그레이스케일 이미지일 경우 컬러 이미지로 변환
@@ -215,12 +215,12 @@ def train_camera_control_model(model, train_loader, val_loader, device, epochs=5
         print(
             f"Epoch [{epoch + 1}/{epochs}], Loss: {running_loss / len(train_loader):.4f}, Val Loss: {val_loss / len(val_loader):.4f}")
 
-        # Epoch이 끝날 때마다 검증 데이터에서 예측 결과 저장
-        for idx, (images, labels) in enumerate(val_loader):
-            images, labels = images.to(device), labels.to(device)
-            outputs = model(images)
-            for i in range(images.size(0)):  # 배치 내 각 이미지에 대해 결과 저장
-                save_result_image(images[i], outputs[i], labels[i], idx * len(images) + i, save_dir=results_dir)
+    # 모든 Epoch이 끝날 때 검증 데이터에서 예측 결과 저장
+    for idx, (images, labels) in enumerate(val_loader):
+        images, labels = images.to(device), labels.to(device)
+        outputs = model(images)
+        for i in range(images.size(0)):  # 배치 내 각 이미지에 대해 결과 저장
+            save_result_image(images[i], outputs[i], labels[i], idx * len(images) + i, save_dir=results_dir)
 
     # 모델 저장 경로 생성
     os.makedirs(model_save_path, exist_ok=True)
