@@ -158,14 +158,19 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128))
 
 # 이미지 저장 함수
 def save_result_image(image, predicted, target, idx, save_dir='./results'):
+    # 이미지를 (C, H, W)에서 (H, W, C)로 변환하고 CPU로 이동
     img = image.permute(1, 2, 0).cpu().numpy()  # 이미지 채널 순서 변경 및 CPU로 이동
     img = (img * 255).astype(np.uint8)  # 이미지를 [0, 255]로 스케일링
 
+    # 그레이스케일 이미지일 경우 컬러 이미지로 변환
+    if img.shape[2] == 1:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
     # 예측된 좌표와 실제 좌표를 (0~128) 크기로 변환
-    pred_x = int((predicted[0] + 1) * 64)
-    pred_y = int((predicted[1] + 1) * 64)
-    target_x = int((target[0] + 1) * 64)
-    target_y = int((target[1] + 1) * 64)
+    pred_x = int((predicted[0].item() + 1) * 64)  # torch.Tensor -> Python float로 변환
+    pred_y = int((predicted[1].item() + 1) * 64)
+    target_x = int((target[0].item() + 1) * 64)
+    target_y = int((target[1].item() + 1) * 64)
 
     # 예측 좌표 (빨간색) 및 실제 좌표 (초록색) 표시
     img = cv2.circle(img, (pred_x, pred_y), 5, (0, 0, 255), -1)
