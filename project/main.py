@@ -6,6 +6,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 import pandas as pd
 import numpy as np
+from numpy import ndarray
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from sklearn.model_selection import train_test_split
@@ -134,8 +135,8 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128))
             continue
 
         img = cv2.resize(img, img_size)
-        img = img / 255.0  # [0, 255] 범위의 이미지를 [0, 1] 범위로 정규화
-        images.append(img)
+        img:ndarray = img / 255.0  # [0, 255] 범위의 이미지를 [0, 1] 범위로 정규화
+        images.append(img.astype(np.float32))
 
         # 좌표 정규화 (0~128 사이 값을 -1~1 사이로 변환)
         norm_x = (x / img_size[0]) * 2 - 1
@@ -151,8 +152,8 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128))
             continue
 
         img = cv2.resize(img, img_size)
-        img = img / 255.0  # [0, 255] 범위의 이미지를 [0, 1] 범위로 정규화
-        images.append(img)
+        img: ndarray = img / 255.0  # [0, 255] 범위의 이미지를 [0, 1] 범위로 정규화
+        images.append(img.astype(np.float32))
         labels.append([0, 0])  # 공이 없을 때는 (0, 0) 출력
 
     return np.array(images), np.array(labels)
