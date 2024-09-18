@@ -158,16 +158,12 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128))
 
 # 이미지 저장 함수
 def save_result_image(image, predicted, target, idx, save_dir='./results'):
-    # 이미지를 (C, H, W)에서 (H, W, C)로 변환하고 CPU로 이동
-    img = image.cpu().numpy()  # 이미지 채널 순서 변경 및 CPU로 이동
-    img = (img * 255).astype(np.uint8)  # 이미지를 [0, 255]로 스케일링
-
-    # 그레이스케일 이미지일 경우 컬러 이미지로 변환
-    if img.shape[2] == 1:
-        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    # 이미지를 numpy 형식으로 변환
+    img = image.permute(1, 2, 0).cpu().numpy()  # (C, H, W) -> (H, W, C)로 순서 변경 및 CPU로 이동
+    img = (img * 255).astype(np.uint8)  # [0, 1] 범위를 [0, 255]로 변환하고 uint8로 변환
 
     # 예측된 좌표와 실제 좌표를 (0~128) 크기로 변환
-    pred_x = int((predicted[0].item() + 1) * 64)  # torch.Tensor -> Python float로 변환
+    pred_x = int((predicted[0].item() + 1) * 64)
     pred_y = int((predicted[1].item() + 1) * 64)
     target_x = int((target[0].item() + 1) * 64)
     target_y = int((target[1].item() + 1) * 64)
@@ -181,6 +177,7 @@ def save_result_image(image, predicted, target, idx, save_dir='./results'):
     img_path = os.path.join(save_dir, f"result_{idx}.png")
     cv2.imwrite(img_path, img)
     print(f"Result image saved: {img_path}")
+
 
 
 def train_camera_control_model(model, train_loader, val_loader, device, epochs=50, model_save_path='./model', results_dir='./results'):
