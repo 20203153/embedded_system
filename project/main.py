@@ -134,6 +134,7 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128))
             continue
 
         img = cv2.resize(img, img_size)
+        img = img / 255.0  # [0, 255] 범위의 이미지를 [0, 1] 범위로 정규화
         images.append(img)
 
         # 좌표 정규화 (0~128 사이 값을 -1~1 사이로 변환)
@@ -150,6 +151,7 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128))
             continue
 
         img = cv2.resize(img, img_size)
+        img = img / 255.0  # [0, 255] 범위의 이미지를 [0, 1] 범위로 정규화
         images.append(img)
         labels.append([0, 0])  # 공이 없을 때는 (0, 0) 출력
 
@@ -160,6 +162,13 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128))
 def save_result_image(image, predicted, target, idx, save_dir='./results'):
     # 이미지를 numpy 형식으로 변환
     img = image.permute(1, 2, 0).cpu().numpy()  # (C, H, W) -> (H, W, C)로 순서 변경 및 CPU로 이동
+
+    # 이미지를 [0, 255]로 스케일링하고, np.uint8로 변환
+    img = (img * 255).astype(np.uint8)
+
+    # 만약 이미지가 grayscale로 잘못된 경우 (1채널), 이를 3채널로 확장
+    if img.shape[2] == 1:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
     # 예측된 좌표와 실제 좌표를 (0~128) 크기로 변환
     pred_x = int((predicted[0].item() + 1) * 64)
@@ -176,7 +185,6 @@ def save_result_image(image, predicted, target, idx, save_dir='./results'):
     img_path = os.path.join(save_dir, f"result_{idx}.png")
     cv2.imwrite(img_path, img)
     print(f"Result image saved: {img_path}")
-
 
 
 def train_camera_control_model(model, train_loader, val_loader, device, epochs=50, model_save_path='./model', results_dir='./results'):
