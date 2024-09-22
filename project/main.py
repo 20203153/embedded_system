@@ -69,10 +69,14 @@ class CameraControlModel(nn.Module):
         self.se2 = SqueezeExcitationBlock(256)
         self.pool4 = nn.MaxPool2d(2)
 
+        self.res5 = ResidualBlock(256, 512)
+        self.se3 = SqueezeExcitationBlock(512)
+        self.pool5 = nn.MaxPool2d(2)
+
         self.global_avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc1 = nn.Linear(256, 128)
-        self.fc2 = nn.Linear(128, 64)
-        self.fc3 = nn.Linear(64, 32)
+        self.fc1 = nn.Linear(512, 256)
+        self.fc2 = nn.Linear(256, 128)
+        self.fc3 = nn.Linear(128, 32)
         self.fc_out = nn.Linear(32, 2)
 
     def forward(self, x):
@@ -89,6 +93,10 @@ class CameraControlModel(nn.Module):
         x = self.res4(x)
         x = self.se2(x)
         x = self.pool4(x)
+
+        x = self.res5(x)
+        x = self.se3(x)
+        x = self.pool5(x)
 
         x = self.global_avg_pool(x)
         x = x.view(x.size(0), -1)
