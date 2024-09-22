@@ -71,7 +71,8 @@ class CameraControlModel(nn.Module):
 
         self.global_avg_pool = nn.AdaptiveAvgPool2d(1)
         self.fc1 = nn.Linear(256, 128)
-        self.fc2 = nn.Linear(128, 32)
+        self.fc2 = nn.Linear(128, 64)
+        self.fc3 = nn.Linear(64, 32)
         self.fc_out = nn.Linear(32, 2)
 
     def forward(self, x):
@@ -94,6 +95,8 @@ class CameraControlModel(nn.Module):
         x = F.leaky_relu(self.fc1(x), negative_slope=0.1)
         x = F.dropout(x, 0.3)
         x = F.leaky_relu(self.fc2(x), negative_slope=0.1)
+        x = F.dropout(x, 0.3)
+        x = F.leaky_relu(self.fc3(x), negative_slope=0.1)
         x = F.dropout(x, 0.3)
         x = torch.tanh(self.fc_out(x))
         return x
