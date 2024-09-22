@@ -164,6 +164,8 @@ def save_result_image(image, predicted, target, idx, save_dir='./results'):
     # 이미지를 numpy 형식으로 변환
     img: ndarray = image.cpu().permute(1, 2, 0).numpy()
 
+    img = (img * 255).astype(np.uint8)
+
     # numpy ndarray를 cv2.Mat으로 변환
     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)  # RGB -> BGR 변환 (필요한 경우)
     img = np.uint8(img)  # 데이터 타입을 uint8으로 명시적으로 변환
