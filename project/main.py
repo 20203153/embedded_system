@@ -3,7 +3,6 @@ import cv2
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 import pandas as pd
 import numpy as np
 from numpy import ndarray
@@ -12,9 +11,9 @@ from torchvision import transforms
 from torchvision import models
 
 # 256x256 이미지 대응 Camera Control Model
-class CameraControlEfficientNet(nn.Module):
+class CameraControlNet(nn.Module):
     def __init__(self):
-        super(CameraControlEfficientNet, self).__init__()
+        super(CameraControlNet, self).__init__()
 
         # EfficientNet 사전 학습된 모델 불러오기 (efficientnet_b0 ~ b7 모델 선택 가능)
         efficientnet = models.efficientnet_b0(pretrained=True)  # pretrained=True로 가중치를 가져옵니다.
@@ -220,7 +219,7 @@ if __name__ == "__main__":
         print(f"Using {device} for training.")
 
     # 모델 초기화
-    model = CameraControlModel()
+    model = CameraControlNet()
 
     # 모델 학습 및 ONNX로 저장
     train_camera_control_model(model, train_loader, val_loader, device, epochs=50, model_save_path='./model')
