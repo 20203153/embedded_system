@@ -66,16 +66,11 @@ class CameraControlModel(nn.Module):
         self.se3 = SqueezeExcitationBlock(512)
         self.pool5 = nn.MaxPool2d(2)  # 8x8
 
-        # 추가 레이어 (복잡도를 유지)
-        self.res6 = ResidualBlock(512, 512)
-        self.se4 = SqueezeExcitationBlock(512)
-        self.pool6 = nn.MaxPool2d(2)  # 4x4
-
         self.global_avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc1 = nn.Linear(512, 256)
         self.fc2 = nn.Linear(256, 128)
         self.fc3 = nn.Linear(128, 64)
-        self.fc_out = nn.Linear(64, 2)
+        self.fc4 = nn.Linear(64, 32)
+        self.fc_out = nn.Linear(32, 2)
 
     def forward(self, x):
         x = F.relu(self.bn1(self.conv1(x)))
@@ -96,10 +91,6 @@ class CameraControlModel(nn.Module):
         x = self.se3(x)
         x = self.pool5(x)
 
-        x = self.res6(x)
-        x = self.se4(x)
-        x = self.pool6(x)
-
         x = self.global_avg_pool(x)
         x = x.view(x.size(0), -1)
 
@@ -108,6 +99,8 @@ class CameraControlModel(nn.Module):
         x = F.relu(self.fc2(x))
         x = F.dropout(x, 0.3)
         x = F.relu(self.fc3(x))
+        x = F.dropout(x, 0.3)
+        x = F.relu(self.fc4(x))
         x = F.dropout(x, 0.3)
         x = torch.tanh(self.fc_out(x))
         return x
