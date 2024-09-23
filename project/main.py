@@ -230,4 +230,4 @@ if __name__ == "__main__":
     model = CameraControlNet()
 
     # 모델 학습 및 ONNX로 저장
-    train_camera_control_model(model, train_loader, val_loader, device, epochs=200, model_save_path='./model')
+    train_camera_control_model(model, train_loader, val_loader, device, epochs=50, model_save_path='./model')
