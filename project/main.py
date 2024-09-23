@@ -67,8 +67,8 @@ class CameraControlModel(nn.Module):
         self.pool5 = nn.MaxPool2d(2)  # 8x8
 
         self.global_avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc2 = nn.Linear(256, 128)
-        self.fc3 = nn.Linear(128, 64)
+        self.fc2 = nn.Linear(512, 256)
+        self.fc3 = nn.Linear(256, 64)
         self.fc4 = nn.Linear(64, 32)
         self.fc_out = nn.Linear(32, 2)
 
