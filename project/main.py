@@ -9,98 +9,38 @@ import numpy as np
 from numpy import ndarray
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
-
-# Residual Block
-class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(ResidualBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-
-        self.shortcut = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False) if in_channels != out_channels else nn.Identity()
-
-    def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        out += self.shortcut(x)
-        out = F.relu(out)
-        return out
-
-# Squeeze-and-Excitation Block
-class SqueezeExcitationBlock(nn.Module):
-    def __init__(self, in_channels, ratio=16):
-        super(SqueezeExcitationBlock, self).__init__()
-        self.fc1 = nn.Linear(in_channels, in_channels // ratio)
-        self.fc2 = nn.Linear(in_channels // ratio, in_channels)
-
-    def forward(self, x):
-        batch_size, channels, _, _ = x.size()
-        kernel_size = (x.size(2), x.size(3))
-        out = F.avg_pool2d(x, kernel_size).view(batch_size, channels)
-        out = F.relu(self.fc1(out))
-        out = torch.sigmoid(self.fc2(out)).view(batch_size, channels, 1, 1)
-        return x * out
+from torchvision import models
 
 # 256x256 이미지 대응 Camera Control Model
-class CameraControlModel(nn.Module):
+class CameraControlEfficientNet(nn.Module):
     def __init__(self):
-        super(CameraControlModel, self).__init__()
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(32)
-        self.se1 = SqueezeExcitationBlock(32)
-        self.pool1 = nn.MaxPool2d(2)  # 128x128
+        super(CameraControlEfficientNet, self).__init__()
 
-        self.res2 = ResidualBlock(32, 64)
-        self.pool2 = nn.MaxPool2d(2)  # 64x64
+        # EfficientNet 사전 학습된 모델 불러오기 (efficientnet_b0 ~ b7 모델 선택 가능)
+        efficientnet = models.efficientnet_b0(pretrained=True)  # pretrained=True로 가중치를 가져옵니다.
 
-        self.res3 = ResidualBlock(64, 128)
-        self.pool3 = nn.MaxPool2d(2)  # 32x32
+        # EfficientNet의 마지막 Fully Connected Layer를 수정하여 2개 출력 (카메라 상하 및 좌우 각도)
+        self.features = efficientnet.features  # EfficientNet의 특성 추출 부분
+        self.pool = nn.AdaptiveAvgPool2d(1)  # Global Average Pooling
+        self.fc1 = nn.Linear(efficientnet.classifier[1].in_features, 256)
+        self.fc2 = nn.Linear(256, 128)
+        self.fc_out = nn.Linear(128, 2)  # 카메라 각도 예측: 2개의 출력 (x, y)
 
-        self.res4 = ResidualBlock(128, 256)
-        self.se2 = SqueezeExcitationBlock(256)
-        self.pool4 = nn.MaxPool2d(2)  # 16x16
-
-        self.res5 = ResidualBlock(256, 512)
-        self.se3 = SqueezeExcitationBlock(512)
-        self.pool5 = nn.MaxPool2d(2)  # 8x8
-
-        self.global_avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc2 = nn.Linear(512, 256)
-        self.fc3 = nn.Linear(256, 64)
-        self.fc4 = nn.Linear(64, 32)
-        self.fc_out = nn.Linear(32, 2)
+        # 활성화 함수
+        self.leaky_relu = nn.LeakyReLU(negative_slope=0.1)
 
     def forward(self, x):
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = self.se1(x)
-        x = self.pool1(x)
+        x = self.features(x)  # EfficientNet 특성 추출
+        x = self.pool(x)  # Global Average Pooling
+        x = torch.flatten(x, 1)  # Flatten
 
-        x = self.res2(x)
-        x = self.pool2(x)
+        # Fully Connected Layers
+        x = self.leaky_relu(self.fc1(x))
+        x = nn.Dropout(0.3)(x)
+        x = self.leaky_relu(self.fc2(x))
+        x = nn.Dropout(0.3)(x)
+        x = torch.tanh(self.fc_out(x))  # -1 <= x, y <= 1 범위로 예측
 
-        x = self.res3(x)
-        x = self.pool3(x)
-
-        x = self.res4(x)
-        x = self.se2(x)
-        x = self.pool4(x)
-
-        x = self.res5(x)
-        x = self.se3(x)
-        x = self.pool5(x)
-
-        x = self.global_avg_pool(x)
-        x = x.view(x.size(0), -1)
-
-        x = F.relu(self.fc2(x))
-        x = F.dropout(x, 0.3)
-        x = F.relu(self.fc3(x))
-        x = F.dropout(x, 0.3)
-        x = F.relu(self.fc4(x))
-        x = F.dropout(x, 0.3)
-        x = torch.tanh(self.fc_out(x))
         return x
 
 
@@ -194,9 +134,9 @@ def save_result_image(image, predicted, target, idx, save_dir='./results'):
     print(f"Result image saved: {img_path}")
 
 
-def train_camera_control_model(model, train_loader, val_loader, device, epochs=50, model_save_path='./model', results_dir='./results'):
+def train_camera_control_model(model, train_loader, val_loader, device, epochs=100, model_save_path='./model', results_dir='./results'):
     model.to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=1e-4)
+    optimizer = optim.AdamW(model.parameters(), lr=1e-6)
     criterion = nn.MSELoss()
 
     for epoch in range(epochs):
