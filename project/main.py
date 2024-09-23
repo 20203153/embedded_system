@@ -10,9 +10,7 @@ from numpy import ndarray
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
-
-
-# 간소화된 Residual Block
+# Residual Block
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(ResidualBlock, self).__init__()
@@ -30,31 +28,58 @@ class ResidualBlock(nn.Module):
         out = F.relu(out)
         return out
 
+# Squeeze-and-Excitation Block
+class SqueezeExcitationBlock(nn.Module):
+    def __init__(self, in_channels, ratio=16):
+        super(SqueezeExcitationBlock, self).__init__()
+        self.fc1 = nn.Linear(in_channels, in_channels // ratio)
+        self.fc2 = nn.Linear(in_channels // ratio, in_channels)
 
-# 경량화된 Camera Control Model
+    def forward(self, x):
+        batch_size, channels, _, _ = x.size()
+        kernel_size = (x.size(2), x.size(3))
+        out = F.avg_pool2d(x, kernel_size).view(batch_size, channels)
+        out = F.relu(self.fc1(out))
+        out = torch.sigmoid(self.fc2(out)).view(batch_size, channels, 1, 1)
+        return x * out
+
+# 256x256 이미지 대응 Camera Control Model
 class CameraControlModel(nn.Module):
     def __init__(self):
         super(CameraControlModel, self).__init__()
-        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(16)
-        self.pool1 = nn.MaxPool2d(2)
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.se1 = SqueezeExcitationBlock(32)
+        self.pool1 = nn.MaxPool2d(2)  # 128x128
 
-        self.res2 = ResidualBlock(16, 32)
-        self.pool2 = nn.MaxPool2d(2)
+        self.res2 = ResidualBlock(32, 64)
+        self.pool2 = nn.MaxPool2d(2)  # 64x64
 
-        self.res3 = ResidualBlock(32, 64)
-        self.pool3 = nn.MaxPool2d(2)
+        self.res3 = ResidualBlock(64, 128)
+        self.pool3 = nn.MaxPool2d(2)  # 32x32
 
-        self.res4 = ResidualBlock(64, 128)
-        self.pool4 = nn.MaxPool2d(2)
+        self.res4 = ResidualBlock(128, 256)
+        self.se2 = SqueezeExcitationBlock(256)
+        self.pool4 = nn.MaxPool2d(2)  # 16x16
+
+        self.res5 = ResidualBlock(256, 512)
+        self.se3 = SqueezeExcitationBlock(512)
+        self.pool5 = nn.MaxPool2d(2)  # 8x8
+
+        # 추가 레이어 (복잡도를 유지)
+        self.res6 = ResidualBlock(512, 512)
+        self.se4 = SqueezeExcitationBlock(512)
+        self.pool6 = nn.MaxPool2d(2)  # 4x4
 
         self.global_avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc1 = nn.Linear(128, 64)
-        self.fc2 = nn.Linear(64, 32)
-        self.fc_out = nn.Linear(32, 2)
+        self.fc1 = nn.Linear(512, 256)
+        self.fc2 = nn.Linear(256, 128)
+        self.fc3 = nn.Linear(128, 64)
+        self.fc_out = nn.Linear(64, 2)
 
     def forward(self, x):
         x = F.relu(self.bn1(self.conv1(x)))
+        x = self.se1(x)
         x = self.pool1(x)
 
         x = self.res2(x)
@@ -64,7 +89,16 @@ class CameraControlModel(nn.Module):
         x = self.pool3(x)
 
         x = self.res4(x)
+        x = self.se2(x)
         x = self.pool4(x)
+
+        x = self.res5(x)
+        x = self.se3(x)
+        x = self.pool5(x)
+
+        x = self.res6(x)
+        x = self.se4(x)
+        x = self.pool6(x)
 
         x = self.global_avg_pool(x)
         x = x.view(x.size(0), -1)
@@ -73,11 +107,13 @@ class CameraControlModel(nn.Module):
         x = F.dropout(x, 0.3)
         x = F.relu(self.fc2(x))
         x = F.dropout(x, 0.3)
+        x = F.relu(self.fc3(x))
+        x = F.dropout(x, 0.3)
         x = torch.tanh(self.fc_out(x))
         return x
 
 
-# Custom Dataset
+# 데이터셋 클래스 정의
 class CameraControlDataset(Dataset):
     def __init__(self, images, labels, transform=None):
         self.images = images
@@ -90,8 +126,10 @@ class CameraControlDataset(Dataset):
     def __getitem__(self, idx):
         image = self.images[idx]
         label = self.labels[idx]
+
         if self.transform:
             image = self.transform(image)
+
         return image, torch.tensor(label, dtype=torch.float32)
 
 
