@@ -2,10 +2,10 @@ import os
 import cv2
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import pandas as pd
 import numpy as np
 from numpy import ndarray
+from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from torchvision import models
@@ -16,7 +16,7 @@ class CameraControlNet(nn.Module):
         super(CameraControlNet, self).__init__()
 
         # EfficientNet 사전 학습된 모델 불러오기 (efficientnet_b0 ~ b7 모델 선택 가능)
-        efficientnet = models.efficientnet_b0(pretrained=True)  # pretrained=True로 가중치를 가져옵니다.
+        efficientnet = models.efficientnet_b1(pretrained=True)  # pretrained=True로 가중치를 가져옵니다.
 
         # EfficientNet의 마지막 Fully Connected Layer를 수정하여 2개 출력 (카메라 상하 및 좌우 각도)
         self.features = efficientnet.features  # EfficientNet의 특성 추출 부분
@@ -133,9 +133,10 @@ def save_result_image(image, predicted, target, idx, save_dir='./results'):
     print(f"Result image saved: {img_path}")
 
 
-def train_camera_control_model(model, train_loader, val_loader, device, epochs=100, model_save_path='./model', results_dir='./results'):
+def train_camera_control_model(model, train_loader, val_loader, device, epochs=100, lr=1e-4, model_save_path='./model', results_dir='./results'):
     model.to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=1e-6)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    scheduler = StepLR(optimizer, step_size=10, gamma=0.5)  # 매 10번의 epoch마다 학습률을 절반으로 감소
     criterion = nn.MSELoss()
 
     for epoch in range(epochs):
@@ -152,6 +153,9 @@ def train_camera_control_model(model, train_loader, val_loader, device, epochs=1
 
             running_loss += loss.item()
 
+        # 학습률 갱신
+        scheduler.step()
+
         # Validation
         model.eval()
         val_loss = 0.0
@@ -164,6 +168,10 @@ def train_camera_control_model(model, train_loader, val_loader, device, epochs=1
 
         print(
             f"Epoch [{epoch + 1}/{epochs}], Loss: {running_loss / len(train_loader):.4f}, Val Loss: {val_loss / len(val_loader):.4f}")
+
+    # 모델 저장
+    torch.save(model.state_dict(), os.path.join(model_save_path, "fine_tuned_model.pth"))
+    print(f"Model saved at {model_save_path}")
 
     # 모든 Epoch이 끝날 때 검증 데이터에서 예측 결과 저장
     for idx, (images, labels) in enumerate(val_loader):
@@ -222,4 +230,4 @@ if __name__ == "__main__":
     model = CameraControlNet()
 
     # 모델 학습 및 ONNX로 저장
-    train_camera_control_model(model, train_loader, val_loader, device, epochs=50, model_save_path='./model')
+    train_camera_control_model(model, train_loader, val_loader, device, epochs=200, model_save_path='./model')
