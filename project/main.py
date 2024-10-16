@@ -57,13 +57,18 @@ class CameraControlDataset(Dataset):
         image = self.images[idx]
         label = self.labels[idx]
 
+        # Apply Canny filter
+        image_gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)  # Convert to grayscale
+        edges = cv2.Canny(image_gray, 100, 200)  # Apply Canny edge detection
+        edges_image = np.stack((edges,)*3, axis=-1)  # Convert 2D edges back to 3D image format by stacking
+
         if self.transform:
-            image = self.transform(image)
+            edges_image = self.transform(edges_image)
 
-        return image, torch.tensor(label, dtype=torch.float32)
+        return edges_image, torch.tensor(label, dtype=torch.float32)
 
 
-def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128)):
+def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(256, 256)):
     labeled_data = pd.read_csv(csv_path)
 
     images = []
@@ -84,7 +89,7 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(128, 128))
         img = img / 255.0  # [0, 255] 범위의 이미지를 [0, 1] 범위로 정규화
         images.append(img)
 
-        # 좌표 정규화 (0~128 사이 값을 -1~1 사이로 변환)
+        # 좌표 정규화 (0~img_size[0] 사이 값을 -1~1 사이로 변환)
         norm_x = (x / img_size[0]) * 2 - 1
         norm_y = (y / img_size[1]) * 2 - 1
         labels.append([norm_x, norm_y])
