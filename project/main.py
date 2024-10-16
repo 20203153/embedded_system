@@ -9,39 +9,46 @@ from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from torchvision import models
+from tqdm import tqdm
 
-# 256x256 이미지 대응 Camera Control Model
 class CameraControlNet(nn.Module):
     def __init__(self):
         super(CameraControlNet, self).__init__()
 
-        # EfficientNet 사전 학습된 모델 불러오기 (efficientnet_b0 ~ b7 모델 선택 가능)
-        efficientnet = models.efficientnet_b1(pretrained=True)  # pretrained=True로 가중치를 가져옵니다.
+        # Convolutional Layers
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, stride=1, padding=1)  # (256, 256, 3) -> (256, 256, 32)
+        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)  # (256, 256, 32) -> (128, 128, 32)
 
-        # EfficientNet의 마지막 Fully Connected Layer를 수정하여 2개 출력 (카메라 상하 및 좌우 각도)
-        self.features = efficientnet.features  # EfficientNet의 특성 추출 부분
-        self.pool = nn.AdaptiveAvgPool2d(1)  # Global Average Pooling
-        self.fc1 = nn.Linear(efficientnet.classifier[1].in_features, 256)
-        self.fc2 = nn.Linear(256, 128)
-        self.fc_out = nn.Linear(128, 2)  # 카메라 각도 예측: 2개의 출력 (x, y)
+        self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=1)  # (128, 128, 32) -> (128, 128, 64)
+        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)  # (128, 128, 64) -> (64, 64, 64)
 
-        # 활성화 함수
-        self.leaky_relu = nn.LeakyReLU(negative_slope=0.1)
+        self.conv3 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, stride=1, padding=1)  # (64, 64, 64) -> (64, 64, 128)
+        self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)  # (64, 64, 128) -> (32, 32, 128)
+
+        self.conv4 = nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, stride=1, padding=1)  # (32, 32, 128) -> (32, 32, 256)
+        self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)  # (32, 32, 256) -> (16, 16, 256)
+
+        # Fully connected layers
+        self.fc1 = nn.Linear(256 * 16 * 16, 512)  # 256 * 16 * 16 = 65536
+        self.fc2 = nn.Linear(512, 256)
+        self.fc_out = nn.Linear(256, 2)  # Output: 2 angles (x, y)
+
+        # Activation functions and dropout
+        self.relu = nn.LeakyReLU()
+        self.dropout = nn.Dropout(0.5)
 
     def forward(self, x):
-        x = self.features(x)  # EfficientNet 특성 추출
-        x = self.pool(x)  # Global Average Pooling
-        x = torch.flatten(x, 1)  # Flatten
+        x = self.pool1(self.relu(self.conv1(x)))  # First convolution layer
+        x = self.pool2(self.relu(self.conv2(x)))  # Second convolution layer
+        x = self.pool3(self.relu(self.conv3(x)))  # Third convolution layer
+        x = self.pool4(self.relu(self.conv4(x)))  # Fourth convolution layer
 
-        # Fully Connected Layers
-        x = self.leaky_relu(self.fc1(x))
-        x = nn.Dropout(0.3)(x)
-        x = self.leaky_relu(self.fc2(x))
-        x = nn.Dropout(0.3)(x)
-        x = torch.tanh(self.fc_out(x))  # -1 <= x, y <= 1 범위로 예측
+        x = x.view(-1, 256 * 16 * 16)  # Flatten the tensor for fully connected layers
+        x = self.dropout(self.relu(self.fc1(x)))  # First fully connected layer
+        x = self.dropout(self.relu(self.fc2(x)))  # Second fully connected layer
+        x = torch.tanh(self.fc_out(x))  # Output layer with tanh to keep output between -1 and 1
 
         return x
-
 
 # 데이터셋 클래스 정의
 class CameraControlDataset(Dataset):
@@ -57,16 +64,10 @@ class CameraControlDataset(Dataset):
         image = self.images[idx]
         label = self.labels[idx]
 
-        # Apply Canny filter
-        image_gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)  # Convert to grayscale
-        edges = cv2.Canny(image_gray, 100, 200)  # Apply Canny edge detection
-        edges_image = np.stack((edges,)*3, axis=-1)  # Convert 2D edges back to 3D image format by stacking
-
         if self.transform:
-            edges_image = self.transform(edges_image)
+            image = self.transform(image)
 
-        return edges_image, torch.tensor(label, dtype=torch.float32)
-
+        return image, torch.tensor(label, dtype=torch.float32)
 
 def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(256, 256)):
     labeled_data = pd.read_csv(csv_path)
@@ -74,80 +75,70 @@ def load_labeled_data(csv_path, image_folder, empty_folder, img_size=(256, 256))
     images = []
     labels = []
 
-    # 공이 있는 이미지와 좌표 불러오기
     for _, row in labeled_data.iterrows():
         image_file = row['image']
         x, y = row['x'], row['y']
 
         img_path = str(os.path.join(image_folder, image_file))
-        img = cv2.imread(img_path, cv2.IMREAD_COLOR)  # 컬러 이미지로 로드
+        img = cv2.imread(img_path, cv2.IMREAD_COLOR)  
+
         if img is None:
             print(f"Unable to load image: {img_path}")
             continue
 
-        img = np.array(cv2.resize(img, img_size), dtype=np.float32)
-        img = img / 255.0  # [0, 255] 범위의 이미지를 [0, 1] 범위로 정규화
+        img = cv2.resize(img, img_size)
+        img = img.astype(np.float32) / 255.0
         images.append(img)
 
-        # 좌표 정규화 (0~img_size[0] 사이 값을 -1~1 사이로 변환)
         norm_x = (x / img_size[0]) * 2 - 1
         norm_y = (y / img_size[1]) * 2 - 1
         labels.append([norm_x, norm_y])
 
-    # 공이 없는 이미지에 대해서는 (0, 0)을 라벨로 할당
     for empty_file in os.listdir(empty_folder):
         empty_img_path = str(os.path.join(empty_folder, empty_file))
-        img = cv2.imread(empty_img_path, cv2.IMREAD_COLOR)  # 공이 없는 이미지도 컬러로 로드
+        img = cv2.imread(empty_img_path, cv2.IMREAD_COLOR)  
         if img is None:
             print(f"Unable to load image: {empty_img_path}")
             continue
 
-        img = np.array(cv2.resize(img, img_size), dtype=np.float32)
-        img = img / 255.0  # [0, 255] 범위의 이미지를 [0, 1] 범위로 정규화
+        img = cv2.resize(img, img_size)
+        img = img.astype(np.float32) / 255.0
         images.append(img)
-        labels.append([0, 0])  # 공이 없을 때는 (0, 0) 출력
+        labels.append([0, 0])  
 
     return images, labels
 
-
 # 이미지 저장 함수
-def save_result_image(image, predicted, target, idx, save_dir='./results'):
-    # 이미지를 numpy 형식으로 변환
+def save_result_image(image, predicted, target, idx, save_dir='./results', size=256):
     img: ndarray = image.cpu().permute(1, 2, 0).numpy()
-
     img = (img * 255).astype(np.uint8)
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
-    # numpy ndarray를 cv2.Mat으로 변환
-    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)  # RGB -> BGR 변환 (필요한 경우)
-    img = np.uint8(img)  # 데이터 타입을 uint8으로 명시적으로 변환
+    pred_x = int((predicted[0].item() + 1) * (size // 2))
+    pred_y = int((predicted[1].item() + 1) * (size // 2))
+    target_x = int((target[0].item() + 1) * (size // 2))
+    target_y = int((target[1].item() + 1) * (size // 2))
 
-    # 예측된 좌표와 실제 좌표를 (0~128) 크기로 변환
-    pred_x = int((predicted[0].item() + 1) * 64)
-    pred_y = int((predicted[1].item() + 1) * 64)
-    target_x = int((target[0].item() + 1) * 64)
-    target_y = int((target[1].item() + 1) * 64)
-
-    # 예측 좌표 (빨간색) 및 실제 좌표 (초록색) 표시
     img = cv2.circle(img, (pred_x, pred_y), 5, (0, 0, 255), -1)
     img = cv2.circle(img, (target_x, target_y), 5, (0, 255, 0), -1)
 
-    # 이미지 저장 경로
     os.makedirs(save_dir, exist_ok=True)
     img_path = os.path.join(save_dir, f"result_{idx}.png")
     cv2.imwrite(img_path, img)
     print(f"Result image saved: {img_path}")
 
-
 def train_camera_control_model(model, train_loader, val_loader, device, epochs=100, lr=1e-4, model_save_path='./model', results_dir='./results'):
     model.to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-    scheduler = StepLR(optimizer, step_size=10, gamma=0.5)  # 매 10번의 epoch마다 학습률을 절반으로 감소
+    scheduler = StepLR(optimizer, step_size=10, gamma=0.5)  
     criterion = nn.MSELoss()
 
-    for epoch in range(epochs):
+    os.makedirs(model_save_path, exist_ok=True)  # 모델 저장 경로 생성
+
+    for epoch in tqdm(range(epochs), "Epoch", position=1):
         model.train()
         running_loss = 0.0
-        for images, labels in train_loader:
+        for images, labels in tqdm(train_loader, "Batch", position=0):
             images, labels = images.to(device), labels.to(device)
 
             optimizer.zero_grad()
@@ -158,46 +149,33 @@ def train_camera_control_model(model, train_loader, val_loader, device, epochs=1
 
             running_loss += loss.item()
 
-        # 학습률 갱신
         scheduler.step()
 
-        # Validation
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
             for images, labels in val_loader:
                 images, labels = images.to(device), labels.to(device)
                 outputs = model(images)
-                loss = criterion(outputs, labels)
-                val_loss += loss.item()
+                val_loss += criterion(outputs, labels).item()
 
-        print(
-            f"Epoch [{epoch + 1}/{epochs}], Loss: {running_loss / len(train_loader):.4f}, Val Loss: {val_loss / len(val_loader):.4f}")
+        print(f"Epoch [{epoch + 1}/{epochs}], Loss: {running_loss / len(train_loader):.4f}, Val Loss: {val_loss / len(val_loader):.4f}")
 
-    # 모델 저장
     torch.save(model.state_dict(), os.path.join(model_save_path, "fine_tuned_model.pth"))
     print(f"Model saved at {model_save_path}")
 
-    # 모든 Epoch이 끝날 때 검증 데이터에서 예측 결과 저장
-    for idx, (images, labels) in enumerate(val_loader):
-        image, label = images.to(device), labels.to(device)
-        output = model(image)
-        for i in range(image.size(0)):  # 배치 내 각 이미지에 대해 결과 저장
-            save_result_image(image[i], output[i], label[i], idx * len(images) + i, save_dir=results_dir)
+    for idx, (images, labels) in tqdm(enumerate(val_loader), "Gen image"):
+        images, labels = images.to(device), labels.to(device)
+        outputs = model(images)
+        for i in range(images.size(0)):
+            save_result_image(images[i], outputs[i], labels[i], idx * len(images) + i, save_dir=results_dir)
 
-    # 모델 저장 경로 생성
-    os.makedirs(model_save_path, exist_ok=True)
-
-    # 학습 완료 후 모델을 ONNX 형식으로 저장
     onnx_path = os.path.join(model_save_path, 'camera_control_model.onnx')
-
-    # 데이터셋에서 하나의 샘플을 사용해 ONNX로 변환
-    sample_img, _ = next(iter(train_loader))  # 첫 번째 배치에서 샘플 가져옴
-    sample_img = sample_img[0:1].to(device)  # 배치에서 첫 이미지만 사용
+    sample_img, _ = next(iter(train_loader))
+    sample_img = sample_img[0:1].to(device)
 
     torch.onnx.export(model, sample_img, onnx_path, opset_version=11)
     print(f"Model saved as ONNX format at: {onnx_path}")
-
 
 if __name__ == "__main__":
     train_csv = './data/train_labels.csv'
@@ -207,23 +185,19 @@ if __name__ == "__main__":
     test_folder = './data/test/balls'
     test_empty_folder = './data/test/empty'
 
-    # 데이터셋 로드
     train_images, train_labels = load_labeled_data(train_csv, train_folder, empty_folder)
     test_images, test_labels = load_labeled_data(test_csv, test_folder, test_empty_folder)
 
-    # 이미지 전처리 (PyTorch 텐서 변환)
     transform = transforms.Compose([
         transforms.ToTensor(),
     ])
 
-    # 데이터셋 및 데이터 로더 생성
     train_dataset = CameraControlDataset(train_images, train_labels, transform=transform)
     test_dataset = CameraControlDataset(test_images, test_labels, transform=transform)
 
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     val_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
-    # MPS 디바이스 확인 및 설정
     if torch.backends.mps.is_available():
         device = torch.device("mps")
         print("Using MPS device for training.")
@@ -231,8 +205,5 @@ if __name__ == "__main__":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using {device} for training.")
 
-    # 모델 초기화
     model = CameraControlNet()
-
-    # 모델 학습 및 ONNX로 저장
-    train_camera_control_model(model, train_loader, val_loader, device, epochs=50, model_save_path='./model')
+    train_camera_control_model(model, train_loader, val_loader, device, epochs=50, model_save_path='./models')
