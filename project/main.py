@@ -4,320 +4,620 @@ import torch
 import torch.nn as nn
 import pandas as pd
 import numpy as np
-from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import Dataset, DataLoader
-from albumentations import Compose, Resize, Normalize, HorizontalFlip, VerticalFlip, RandomBrightnessContrast, HueSaturationValue, KeypointParams
+from albumentations import (
+    Compose, HorizontalFlip, KeypointParams, Normalize, VerticalFlip, RandomBrightnessContrast,
+    HueSaturationValue, ShiftScaleRotate, MotionBlur, GaussianBlur,
+    GridDistortion, OpticalDistortion, ElasticTransform, CoarseDropout,
+    MedianBlur, ColorJitter, Resize
+)
 from albumentations.pytorch import ToTensorV2
 from tqdm import tqdm
-import torch.nn.utils.prune as prune
 import matplotlib.pyplot as plt
+from sklearn.metrics import mean_squared_error
+import random
 
-# 데이터셋 클래스 정의
-class CameraControlDataset(Dataset):
-    def __init__(self, images, labels, transform=None, original_size=(512, 512), augmentation_factor=16):
-        self.images = images  # 리스트 형태 유지
-        self.labels = labels  # 리스트 형태 유지
+# ----------------------------
+# Heatmap 생성 함수
+# ----------------------------
+def generate_heatmap(image_size, keypoint, sigma=2):
+    height, width = image_size
+    y, x = keypoint
+    heatmap = np.zeros((height, width), dtype=np.float32)
+
+    if x < 0 or y < 0 or x >= width or y >= height:
+        return heatmap
+
+    size = int(6 * sigma + 1)
+    x0 = int(x)
+    y0 = int(y)
+
+    x_min = max(0, x0 - size // 2)
+    x_max = min(width, x0 + size // 2 + 1)
+    y_min = max(0, y0 - size // 2)
+    y_max = min(height, y0 + size // 2 + 1)
+
+    xx, yy = np.meshgrid(np.arange(x_min, x_max), np.arange(y_min, y_max))
+    gaussian = np.exp(-((xx - x0) ** 2 + (yy - y0) ** 2) / (2 * sigma ** 2))
+    heatmap[y_min:y_max, x_min:x_max] = np.maximum(heatmap[y_min:y_max, x_min:x_max], gaussian)
+
+    if heatmap.max() > 0:
+        heatmap = heatmap / heatmap.max()
+
+    return heatmap
+
+class TennisBallDataset(Dataset):
+    def __init__(self, images, labels, transform=None, heatmap_size=(240, 320),
+                 num_keypoints=1, sigma=2, augmentation_factor=5,
+                 original_image_size=(480, 640), margin=6):
+        self.images = images
+        self.labels = labels
         self.transform = transform
-        self.original_size = original_size  # 원본 이미지 크기 (512, 512)
+        self.heatmap_size = heatmap_size
+        self.num_keypoints = num_keypoints
+        self.sigma = sigma
         self.augmentation_factor = augmentation_factor
+        self.original_image_size = original_image_size
+        self.margin = margin
+
+        # Maintain labels for transformed states (flipping, etc.)
+        self.processed_labels = []
+        for label in self.labels:
+            x, y, visible = label
+            # Store the original label
+            processed_label = [x, y, visible]
+            # You can add transformations based on augmentations if needed
+            self.processed_labels.append(processed_label)
 
     def __len__(self):
         return len(self.images) * self.augmentation_factor
 
+    def generate_heatmaps(self, keypoints):
+        heatmaps = np.zeros((self.num_keypoints, self.heatmap_size[0], self.heatmap_size[1]), dtype=np.float32)
+        for i, kp in enumerate(keypoints[:self.num_keypoints]):
+            if kp is None or (kp[0] == 0.0 and kp[1] == 0.0):
+                continue
+            x, y = kp
+            heatmaps[i] = generate_heatmap((self.heatmap_size[0], self.heatmap_size[1]), (y, x), self.sigma)
+        return heatmaps
+
     def __getitem__(self, idx):
-        actual_idx = idx % len(self.images)  # 원본 데이터 인덱스 순환
-        image = self.images[actual_idx]
-        label = self.labels[actual_idx].copy()  # 라벨의 복사본 사용
+        real_idx = idx // self.augmentation_factor
+        image_path = self.images[real_idx]
+        image = cv2.imread(image_path, cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError(f"Unable to load image: {image_path}")
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-        # 공이 있는 경우 키포인트 설정
-        if label[2] == 1:
-            keypoints = [label[:2]]
-        else:
-            keypoints = []
+        label = self.processed_labels[real_idx]
+        x, y, visible = label
+        keypoints = [[x, y]] if visible == 1 else []
 
-        data = {"image": image, "keypoints": keypoints}
-
+        # Perform the augmentations
         if self.transform:
-            augmented = self.transform(**data)
-            image = augmented["image"]
-            keypoints = augmented["keypoints"]
-
-            if len(keypoints) > 0:
-                # 키포인트가 있는 경우 라벨 업데이트
-                label[:2] = keypoints[0]
-                label[2] = 1
-            else:
-                # 키포인트가 없는 경우 (이미지 밖으로 나간 경우)
-                label = [0, 0, 0]
+            augmented = self.transform(image=image, keypoints=keypoints)
+            image = augmented['image']
+            keypoints_aug = augmented['keypoints']
+            # print(f"Augmented keypoints: {keypoints_aug}")  # Debug statement
         else:
-            if label[2] == 0:
-                label = [0, 0, 0]
+            keypoints_aug = keypoints
 
-        # 이미지 크기 얻기 (채널, 높이, 너비)
-        _, height, width = image.shape
+        # Scaled heatmap keys
+        scale_x = self.heatmap_size[1] / self.original_image_size[1]
+        scale_y = self.heatmap_size[0] / self.original_image_size[0]
 
-        # 좌표를 [-1, 1]로 정규화
-        norm_x = 2 * (label[0] / width) - 1
-        norm_y = 2 * (label[1] / height) - 1
-        label = [norm_x, norm_y, label[2]]
+        if len(keypoints_aug) == 0:
+            keypoints_scaled = [[0.0, 0.0]]
+            visible = 0
+        else:
+            kp = keypoints_aug[0]
+            x_scaled = kp[0] * scale_x
+            y_scaled = kp[1] * scale_y
+            x_scaled = np.clip(x_scaled, self.margin, self.heatmap_size[1] - 1 - self.margin)
+            y_scaled = np.clip(y_scaled, self.margin, self.heatmap_size[0] - 1 - self.margin)
+            keypoints_scaled = [[x_scaled, y_scaled]]
+            visible = 1
 
-        return image, torch.tensor(label, dtype=torch.float32)
+        heatmaps = self.generate_heatmaps(keypoints_scaled)
 
-# 데이터 로딩 함수
-def load_labeled_data(csv_path, image_folder, empty_folder):
-    labeled_data = pd.read_csv(csv_path)
+        # Scaling true labels back
+        if visible == 1:
+            true_x_scaled = x * scale_x
+            true_y_scaled = y * scale_y
+            true_x_scaled = np.clip(true_x_scaled, self.margin, self.heatmap_size[1] - 1 - self.margin)
+            true_y_scaled = np.clip(true_y_scaled, self.margin, self.heatmap_size[0] - 1 - self.margin)
+            dataset_label = [true_x_scaled, true_y_scaled, visible]
+        else:
+            dataset_label = [0.0, 0.0, 0]
 
-    images = []
-    labels = []
+        # print(f"Dataset label: {dataset_label}")  # Debug statement
 
-    for _, row in labeled_data.iterrows():
-        image_file = row['image']
-        x, y = row['x'], row['y']
-
-        img_path = os.path.join(image_folder, image_file)
-        img = cv2.imread(img_path, cv2.IMREAD_COLOR)
-
-        if img is None:
-            print(f"Unable to load image: {img_path}")
-            continue
-
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # RGB로 변환
-        images.append(img)
-
-        # 좌표는 원본 이미지 크기(512x512) 기준
-        labels.append([x, y, 1])  # (x, y, has_ball)
-
-    # 공이 없는 이미지 로드
-    for empty_file in os.listdir(empty_folder):
-        empty_img_path = os.path.join(empty_folder, empty_file)
-        img = cv2.imread(empty_img_path, cv2.IMREAD_COLOR)
-        if img is None:
-            print(f"Unable to load image: {empty_img_path}")
-            continue
-
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        images.append(img)
-        labels.append([0, 0, 0])  # (x, y, has_ball=0)
-
-    return images, labels
-
-# 경량화된 모델 정의
-class CameraControlNet(nn.Module):
-    def __init__(self):
-        super(CameraControlNet, self).__init__()
-
-        # 첫 번째 컨볼루션 레이어
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, stride=2, padding=1)
-        self.bn1 = nn.BatchNorm2d(32)
-        self.relu = nn.ReLU(inplace=True)
-        self.dropout1 = nn.Dropout(0.2)
-
-        # 깊이별 분리 합성곱 블록
-        self.blocks = nn.Sequential(
-            self._make_dsconv_block(32, 64, stride=1),
-            self._make_dsconv_block(64, 128, stride=2),
-            self._make_dsconv_block(128, 128, stride=1),
-            self._make_dsconv_block(128, 256, stride=2),
-            self._make_dsconv_block(256, 256, stride=1),
-            self._make_dsconv_block(256, 512, stride=2),
-            # 필요한 경우 추가 블록
-        )
-
-        # 전역 평균 풀링 및 출력 레이어
-        self.global_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc1 = nn.Linear(512, 128)
-        self.fc1_act = nn.LeakyReLU(inplace=True)
-        self.fc1_dropout = nn.Dropout(0.2)
-
-        self.fc2 = nn.Linear(128, 32)
-        self.fc2_act = nn.LeakyReLU(inplace=True)
-        self.fc2_dropout = nn.Dropout(0.2)
-
-        self.output_angles = nn.Linear(32, 2)
-        self.output_ball = nn.Linear(32, 1)
-
-    def _make_dsconv_block(self, in_channels, out_channels, stride):
-        return nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=stride, padding=1, groups=in_channels, bias=False),
-            nn.BatchNorm2d(in_channels),
-            nn.LeakyReLU(inplace=True),
-            nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.LeakyReLU(inplace=True),
-            nn.Dropout(0.2)
-        )
+        return image, torch.tensor(heatmaps, dtype=torch.float32), dataset_label
+    
+# ----------------------------
+# 모델 정의
+# ----------------------------
+class ResBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(ResBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.activation = nn.LeakyReLU(0.1)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        # Shortcut connection을 위한 컨볼루션 레이어
+        if in_channels != out_channels:
+            self.shortcut = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0)
+        else:
+            self.shortcut = nn.Identity()  # 입력 차원과 출력 차원이 같을 때
 
     def forward(self, x):
-        x = self.dropout1(self.relu(self.bn1(self.conv1(x))))
-        x = self.blocks(x)
-        x = self.global_pool(x)
-        x = x.view(x.size(0), -1)
-        x = self.fc1_dropout(self.fc1_act(self.fc1(x)))
-        x = self.fc2_dropout(self.fc2_act(self.fc2(x)))
-        angles = torch.tanh(self.output_angles(x))  # 좌표를 [-1, 1]로 제한
-        ball_detect = self.output_ball(x)  # sigmoid 적용하지 않음
-        return angles, ball_detect
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.activation(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out += self.shortcut(x)  # Skip connection
+        out = self.activation(out)
+        return out
 
-# 모델 프루닝 함수
-def apply_pruning(model, amount=0.2):
-    for module in model.modules():
-        if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
-            prune.l1_unstructured(module, name='weight', amount=amount)
-    return model
+class HeatmapModel(nn.Module):
+    def __init__(self, num_keypoints=1, heatmap_size=(240, 320), pretrained=False):
+        super(HeatmapModel, self).__init__()
+        self.res_blocks = nn.Sequential(
+            ResBlock(in_channels=3, out_channels=16),
+            ResBlock(in_channels=16, out_channels=16),
+            ResBlock(in_channels=16, out_channels=16)
+        )
+        self.output_heatmaps = nn.Conv2d(16, num_keypoints, kernel_size=1)
+        self.heatmap_size = heatmap_size  # (height, width)
 
-# 학습 함수
-def train_camera_control_model(model, train_loader, val_loader, device, epochs=50, lr=1e-3, model_save_path='./models', results_dir='./results'):
+    def forward(self, x):
+        x = self.res_blocks(x)
+        heatmaps = self.output_heatmaps(x)
+        heatmaps = nn.functional.interpolate(heatmaps, size=(self.heatmap_size[0], self.heatmap_size[1]), mode='bilinear', align_corners=False)
+        return torch.sigmoid(heatmaps)  # 0~1 사이의 값으로 정규화
+
+# ----------------------------
+# 조기 종료 클래스 정의
+# ----------------------------
+class EarlyStopping:
+    def __init__(self, patience=10, verbose=False, delta=0.0, path='best_model.pth'):
+        self.patience = patience
+        self.verbose = verbose
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+        self.delta = delta
+        self.path = path
+
+    def __call__(self, val_loss, model):
+        """손실을 기반으로 조기 종료를 판단"""
+        score = -val_loss  # 손실은 최소화하므로 음수로 변환
+        if self.best_score is None:
+            self.best_score = score
+            self.save_checkpoint(val_loss, model)
+        elif score < self.best_score + self.delta:
+            self.counter += 1
+            if self.verbose:
+                print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = score
+            self.save_checkpoint(val_loss, model)
+            self.counter = 0
+
+    def save_checkpoint(self, val_loss, model):
+        """최적 모델을 저장"""
+        if self.verbose:
+            print(f'Validation loss decreased ({val_loss:.6f}).  Saving model...')
+        torch.save(model.state_dict(), self.path)
+
+# ----------------------------
+# 학습 함수 정의
+# ----------------------------
+def train_model(model, train_loader, val_loader, device, epochs=100, lr=1e-4, patience=10, model_save_path='best_model.pth'):
+    """
+    모델 학습 함수
+    Args:
+        model (nn.Module): 학습할 모델.
+        train_loader (DataLoader): 학습 데이터 로더.
+        val_loader (DataLoader): 검증 데이터 로더.
+        device (torch.device): 학습 장치.
+        epochs (int): 최대 에폭 수.
+        lr (float): 학습률.
+        patience (int): 조기 종료 인내심.
+        model_save_path (str): 최적 모델 저장 경로.
+    """
     model.to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = CosineAnnealingLR(optimizer, T_max=10)
-    criterion_angle = nn.SmoothL1Loss()
-    criterion_ball = nn.BCEWithLogitsLoss()
-
-    os.makedirs(model_save_path, exist_ok=True)
-    os.makedirs(results_dir, exist_ok=True)
-
-    alpha = 10.0  # 좌표 손실의 가중치 증가
-
-    for epoch in tqdm(range(epochs), desc="Epoch", position=0):
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=patience//2)
+    criterion = nn.BCELoss()  # BCE Loss 사용
+    early_stopping = EarlyStopping(patience=patience, verbose=True, path=model_save_path)
+    scaler = torch.cuda.amp.GradScaler() if torch.cuda.is_available() else None
+    for epoch in tqdm(range(1, epochs + 1), "Epoch", leave=True, mininterval=20):
         model.train()
-        running_loss_angle = 0.0
-        running_loss_ball = 0.0
-        for images, labels in tqdm(train_loader, desc="Batch", position=1, leave=False):
+        running_loss = 0.0
+        for images, heatmaps, _ in tqdm(train_loader, desc=f"Epoch {epoch} - Training", leave=False, mininterval=0.5):
             images = images.to(device)
-            labels = labels.to(device)
-
+            heatmaps = heatmaps.to(device)
             optimizer.zero_grad()
-            outputs_angles, outputs_ball = model(images)
-
-            # Angles loss
-            loss_angle = criterion_angle(outputs_angles, labels[:, :2])
-
-            # Ball detection loss
-            loss_ball = criterion_ball(outputs_ball.squeeze(), labels[:, 2])
-
-            # Total loss with weighting
-            loss = alpha * loss_angle + loss_ball
-            loss.backward()
-            optimizer.step()
-
-            running_loss_angle += loss_angle.item()
-            running_loss_ball += loss_ball.item()
-
-        scheduler.step()
-
-        # Validation
+            if torch.cuda.is_available():
+                with torch.cuda.amp.autocast():
+                    outputs = model(images)
+                    loss = criterion(outputs, heatmaps)
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                outputs = model(images)
+                loss = criterion(outputs, heatmaps)
+                loss.backward()
+                optimizer.step()
+            running_loss += loss.item() * images.size(0)
+        epoch_loss = running_loss / len(train_loader.dataset)
+        # 검증
         model.eval()
-        val_loss_angle = 0.0
-        val_loss_ball = 0.0
+        val_loss = 0.0
         with torch.no_grad():
-            for images, labels in val_loader:
+            for images, heatmaps, _ in tqdm(val_loader, desc=f"Epoch {epoch} - Validation", leave=False, mininterval=0.5):
                 images = images.to(device)
-                labels = labels.to(device)
-                outputs_angles, outputs_ball = model(images)
+                heatmaps = heatmaps.to(device)
+                outputs = model(images)
+                loss = criterion(outputs, heatmaps)
+                val_loss += loss.item() * images.size(0)
+        val_epoch_loss = val_loss / len(val_loader.dataset)
+        print(f"Epoch {epoch}: Train Loss = {epoch_loss:.6f}, Val Loss = {val_epoch_loss:.6f}")
+        scheduler.step(val_epoch_loss)
+        early_stopping(val_epoch_loss, model)
+        if early_stopping.early_stop:
+            print("Early stopping triggered. Stopping training.")
+            break
+    # 최적 모델 로드
+    model.load_state_dict(torch.load(model_save_path))
+    print(f"Best model loaded from {model_save_path}")
 
-                val_loss_angle += criterion_angle(outputs_angles, labels[:, :2]).item()
-                val_loss_ball += criterion_ball(outputs_ball.squeeze(), labels[:, 2]).item()
+# ----------------------------
+# 평가 함수 정의
+# ----------------------------
+def evaluate_model(model, data_loader, device):
+    """
+    모델 평가 함수
+    Args:
+        model (nn.Module): 평가할 모델.
+        data_loader (DataLoader): 평가 데이터 로더.
+        device (torch.device): 평가 장치.
+    """
+    model.eval()
+    all_preds = []
+    all_labels = []
+    with torch.no_grad():
+        for images, heatmaps, _ in tqdm(data_loader, desc="Evaluating", leave=False):
+            images = images.to(device)
+            heatmaps = heatmaps.to(device)
+            outputs = model(images)
+            all_preds.append(outputs.cpu().numpy())
+            all_labels.append(heatmaps.cpu().numpy())
+    all_preds = np.concatenate(all_preds, axis=0)
+    all_labels = np.concatenate(all_labels, axis=0)
+    mse = mean_squared_error(all_labels.flatten(), all_preds.flatten())
+    print(f"Evaluation MSE: {mse:.6f}")
+    # 추가적인 평가 지표 (Precision, Recall 등)
+    # 여기서는 단일 키포인트이므로 간단히 최대값 위치 비교
+    precision = 0.0
+    recall = 0.0
+    for i in range(len(all_preds)):
+        pred_heatmap = all_preds[i][0]
+        true_heatmap = all_labels[i][0]
+        pred_y, pred_x = np.unravel_index(np.argmax(pred_heatmap), pred_heatmap.shape)
+        true_y, true_x = np.unravel_index(np.argmax(true_heatmap), true_heatmap.shape)
+        # 예측과 실제 키포인트 간의 거리 계산 (Threshold 설정)
+        distance = np.sqrt((pred_x - true_x) ** 2 + (pred_y - true_y) ** 2)
+        threshold = 2  # 히트맵 좌표 기준
+        if distance <= threshold:
+            precision += 1
+            recall += 1
+    precision /= len(all_preds)
+    recall /= len(all_preds)
+    print(f"Evaluation Precision: {precision:.6f}, Recall: {recall:.6f}")
+    return mse, precision, recall
 
-        avg_train_loss_angle = running_loss_angle / len(train_loader)
-        avg_train_loss_ball = running_loss_ball / len(train_loader)
-        avg_val_loss_angle = val_loss_angle / len(val_loader)
-        avg_val_loss_ball = val_loss_ball / len(val_loader)
+# ----------------------------
+# 시각화 함수 수정
+# ----------------------------
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
 
-        current_lr = optimizer.param_groups[0]['lr']
-
-        print(f"Epoch [{epoch + 1}/{epochs}] "
-              f"Train Angle Loss: {avg_train_loss_angle:.6f}, Train Ball Loss: {avg_train_loss_ball:.6f}, "
-              f"Val Angle Loss: {avg_val_loss_angle:.6f}, Val Ball Loss: {avg_val_loss_ball:.6f}, "
-              f"LR: {current_lr:.6e}")
-
-    # 모델 저장
-    torch.save(model.state_dict(), os.path.join(model_save_path, "camera_control_model.pth"))
-    print(f"Model saved at {model_save_path}")
-
-
-# 예측 결과 시각화 함수
 def visualize_predictions(model, dataset, device, num_samples=5):
     model.eval()
     indices = np.random.choice(len(dataset), num_samples, replace=False)
+    scale_factor_x = dataset.original_image_size[1] / dataset.heatmap_size[1]  # 640 / 320 = 2
+    scale_factor_y = dataset.original_image_size[0] / dataset.heatmap_size[0]  # 480 / 240 = 2
+    
     for idx in indices:
-        image, label = dataset[idx]
-        image = image.unsqueeze(0).to(device)
+        image, heatmap, dataset_label = dataset[idx]
+        input_image = image.unsqueeze(0).to(device)  # (C, H, W) -> (1, C, H, W)
+        
         with torch.no_grad():
-            pred_angles, pred_ball = model(image)
-        pred_angles = pred_angles.squeeze().cpu().numpy()
-        pred_ball = torch.sigmoid(pred_ball).item()
+            output_heatmap = model(input_image).squeeze(0).cpu().numpy()  # [num_keypoints, H, W]
 
-        # 좌표 복원
-        _, height, width = image.shape[1:]
-        pred_x = ((pred_angles[0] + 1) / 2) * width
-        pred_y = ((pred_angles[1] + 1) / 2) * height
-        true_x = ((label[0].item() + 1) / 2) * width
-        true_y = ((label[1].item() + 1) / 2) * height
-
-        # 이미지 시각화
-        img_np = image.squeeze().cpu().permute(1, 2, 0).numpy()
-        plt.imshow(img_np)
-        if label[2].item() == 1:
-            plt.scatter(true_x, true_y, c='g', label='True', s=40)
-        if pred_ball > 0.5:
-            plt.scatter(pred_x, pred_y, c='r', label='Predicted', s=40)
-        plt.title(f"Has ball: {label[2].item()}, Predicted has ball: {pred_ball:.2f}")
+        # First keypoint - Get the max value position
+        pred_y, pred_x = np.unravel_index(np.argmax(output_heatmap[0]), output_heatmap[0].shape)
+        
+        # Scale up the coordinates
+        pred_x_original = pred_x * scale_factor_x
+        pred_y_original = pred_y * scale_factor_y
+        
+        plt.figure(figsize=(12, 6))
+        
+        plt.subplot(1, 2, 1)
+        plt.imshow(image.permute(1, 2, 0).cpu().numpy())  # (C, H, W) -> (H, W, C)
+        plt.title('Transformed Image with Keypoints')
+        
+        plt.scatter(pred_x_original, pred_y_original, c='r', marker='x', s=100, label='Predicted')
+        
+        true_x, true_y, visible = dataset_label
+        
+        if visible == 1:
+            true_x_original = true_x * scale_factor_x
+            true_y_original = true_y * scale_factor_y
+            plt.scatter(true_x_original, true_y_original, c='g', marker='o', s=100, label='True')
+        
         plt.legend()
+        
+        plt.subplot(1, 2, 2)
+        plt.imshow(output_heatmap[0], cmap='hot', interpolation='nearest')
+        plt.title('Predicted Heatmap')
+        plt.colorbar()
+        
+        plt.tight_layout()  # Adjust layout for better spacing
         plt.show()
 
+        # Optionally, clear the figure to free up memory
+        plt.clf()
+
+# ----------------------------
+# 데이터 유효성 검사 함수 정의
+# ----------------------------
+def validate_dataset(images, labels, image_size=(480, 640), margin=6):
+    """
+    데이터셋의 원본 이미지와 라벨의 유효성을 검사합니다.
+    Args:
+        images (list): 이미지 파일 경로 리스트.
+        labels (list): 각 이미지에 대한 라벨 리스트 [x, y, visible].
+        image_size (tuple): 원본 이미지 크기 (height, width).
+        margin (int): 키포인트가 경계에서 최소 거리.
+    """
+    invalid_entries = []
+    for i, (img_path, label) in enumerate(zip(images, labels)):
+        # 이미지 파일 존재 여부 확인
+        if not os.path.isfile(img_path):
+            invalid_entries.append((i, "Image file not found", img_path))
+            continue
+        
+        # 라벨 유효성 검사
+        x, y, visible = label
+        if visible == 1:
+            if not (margin <= x < image_size[1] - margin and margin <= y < image_size[0] - margin):
+                invalid_entries.append((i, "Invalid coordinates", label))
+    # 결과 출력
+    if invalid_entries:
+        print("Invalid entries found:")
+        for entry in invalid_entries:
+            print(f"Index {entry[0]}: {entry[1]} - {entry[2]}")
+    else:
+        print("All entries are valid.")
+
+# ----------------------------
+# 랜덤 샘플 표시 함수 정의
+# ----------------------------
+def display_random_samples(images, labels, num_samples=5, image_size=(480, 640)):
+    """
+    랜덤으로 선택된 이미지를 표시하고, 해당 라벨을 매칭합니다.
+    Args:
+        images (list): 이미지 파일 경로 리스트.
+        labels (list): 각 이미지에 대한 라벨 리스트 [x, y, visible].
+        num_samples (int): 표시할 샘플 수.
+        image_size (tuple): 원본 이미지 크기 (height, width).
+    """
+    # 랜덤하게 인덱스 선택
+    indices = random.sample(range(len(images)), num_samples)
+    plt.figure(figsize=(15, 8))
+    for i, idx in enumerate(indices):
+        img_path = images[idx]
+        label = labels[idx]
+        x, y, visible = label
+        
+        # 이미지 불러오기
+        image = cv2.imread(img_path)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image = cv2.resize(image, image_size)  # 표시할 크기로 조정
+        plt.subplot(1, num_samples, i + 1)
+        plt.imshow(image)
+        plt.title(f"Visible: {visible}")  # Title에 visible 상태만 표시
+        # 라벨 위치 마킹
+        if visible == 1:
+            plt.scatter(x * (image_size[1] / 640), 
+                        y * (image_size[0] / 480), 
+                        c='g', marker='o', s=100, label='True Label')
+            plt.text(x * (image_size[1] / 640), 
+                     y * (image_size[0] / 480), 
+                     f'({x}, {y})', color='g', fontsize=12, ha='right')
+    plt.tight_layout()
+    plt.show()
+
+# ----------------------------
+# 데이터 로딩 함수 정의
+# ----------------------------
+def load_data(csv_path, ball_dir, empty_dir, image_size=(480, 640), margin=6):
+    """
+    CSV 파일과 이미지 디렉토리에서 데이터를 로드하고, 유효하지 않은 키포인트를 제외합니다.
+    Args:
+        csv_path (str): 라벨 CSV 파일 경로.
+        ball_dir (str): 볼 이미지 디렉토리.
+        empty_dir (str): 빈 이미지 디렉토리.
+        image_size (tuple): 원본 이미지 크기 (height, width).
+        margin (int): 키포인트가 경계에서 최소 거리.
+    Returns:
+        images (list): 유효한 이미지 파일 경로 리스트.
+        labels (list): 각 이미지에 대한 라벨 리스트 [x, y, visible].
+    """
+    df = pd.read_csv(csv_path)
+    images = []
+    labels = []
+    # 볼 이미지 로드
+    for _, row in df.iterrows():
+        img_name = row['image']
+        x, y = row['x'], row['y']
+        img_path = os.path.join(ball_dir, img_name)
+        
+        # 이미지 존재 유무 검사
+        if os.path.exists(img_path):
+            # 좌표 유효성 검사
+            if margin <= x < image_size[1] - margin and margin <= y < image_size[0] - margin:
+                images.append(img_path)
+                labels.append([x, y, 1])  # Visible = 1
+            else:
+                print(f"유효하지 않은 키포인트: {img_name}, x={x}, y={y} (이미지 크기: {image_size}) - 제외됨")
+        else:
+            print(f"이미지 파일을 찾을 수 없습니다: {img_path}")
+    # 빈 이미지 로드 (visible=0)
+    for img_name in os.listdir(empty_dir):
+        img_path = os.path.join(empty_dir, img_name)
+        if (os.path.isfile(img_path) and img_name != ".DS_Store"):
+            images.append(img_path)
+            labels.append([0.0, 0.0, 0])  # Visible = 0
+    return images, labels
+
+# ----------------------------
+# 메인 실행 부분
+# ----------------------------
 if __name__ == "__main__":
+    # 데이터 경로 설정
     train_csv = './data/train_labels.csv'
-    train_folder = './data/train/balls'
-    empty_folder = './data/train/empty'
-    test_csv = './data/test_labels.csv'
-    test_folder = './data/test/balls'
-    test_empty_folder = './data/test/empty'
-
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-    print(f"Using {device} for training.")
-
-    # 원본 이미지 크기 (512, 512)
-    original_size = (512, 512)
-    # 모델 입력 이미지 크기 (256, 256)
-    input_size = (256, 256)
-
-    batch_size = 16
-
-    train_images, train_labels = load_labeled_data(train_csv, train_folder, empty_folder)
-    test_images, test_labels = load_labeled_data(test_csv, test_folder, test_empty_folder)
-
-    # 데이터 증강 및 전처리
+    train_image_dir = './data/train/balls'
+    empty_image_dir = './data/train/empty'
+    val_csv = './data/test_labels.csv'
+    val_image_dir = './data/test/balls'
+    val_empty_image_dir = './data/test/empty'
+    
+    # 디바이스 설정
+    device = torch.device("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
+    print(f"Using device: {device}")
+    
+    # 학습 데이터 로드
+    train_images, train_labels = load_data(train_csv, train_image_dir, empty_image_dir, image_size=(480, 640), margin=6)
+    print(f"Loaded {len(train_images)} training samples.")
+    
+    # 검증 데이터 로드
+    val_images, val_labels = load_data(val_csv, val_image_dir, val_empty_image_dir, image_size=(480, 640), margin=6)
+    print(f"Loaded {len(val_images)} validation samples.")
+    
+    # 데이터셋 유효성 검사
+    print("Validating training dataset...")
+    validate_dataset(train_images, train_labels, image_size=(480, 640), margin=6)
+    print("Validating validation dataset...")
+    validate_dataset(val_images, val_labels, image_size=(480, 640), margin=6)
+    
+    # 데이터 증강 및 전처리 파이프라인 설정
     train_transform = Compose([
-        Resize(*input_size),
         HorizontalFlip(p=0.5),
         VerticalFlip(p=0.5),
-        RandomBrightnessContrast(p=0.5),
-        HueSaturationValue(p=0.5),
-        Normalize(mean=(0.0, 0.0, 0.0), std=(1.0, 1.0, 1.0)),
+        ShiftScaleRotate(shift_limit=0.01, scale_limit=0.1, rotate_limit=0, p=0.5, border_mode=cv2.BORDER_REFLECT_101),
+        GridDistortion(p=0.2),
+        OpticalDistortion(p=0.2),
+        ElasticTransform(alpha=1, sigma=50, p=0.5),
+        RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),
+        HueSaturationValue(hue_shift_limit=10, sat_shift_limit=15, val_shift_limit=10, p=0.5),
+        ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),
+        MotionBlur(p=0.2),
+        GaussianBlur(p=0.2),
+        MedianBlur(blur_limit=3, p=0.1),
+        CoarseDropout(max_holes=4, max_height=8, max_width=8, fill_value=0, p=0.5),
+        Resize(height=480, width=640, p=1.0),  # 모든 변환 후 크기 고정
+        Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
         ToTensorV2(),
-    ], keypoint_params=KeypointParams(format='xy', remove_invisible=False))
-
-    test_transform = Compose([
-        Resize(*input_size),
-        Normalize(mean=(0.0, 0.0, 0.0), std=(1.0, 1.0, 1.0)),
+    ], keypoint_params=KeypointParams(format='xy', remove_invisible=True))
+    
+    val_transform = Compose([
+        HorizontalFlip(p=0.5),
+        VerticalFlip(p=0.5),
+        ShiftScaleRotate(shift_limit=0.01, scale_limit=0.1, rotate_limit=0, p=0.5, border_mode=cv2.BORDER_REFLECT),
+        GridDistortion(p=0.1),
+        OpticalDistortion(p=0.1),
+        ElasticTransform(alpha=1, sigma=50, p=0.3),
+        RandomBrightnessContrast(brightness_limit=0.1, contrast_limit=0.1, p=0.3),
+        HueSaturationValue(hue_shift_limit=5, sat_shift_limit=10, val_shift_limit=5, p=0.3),
+        MotionBlur(p=0.1),
+        GaussianBlur(p=0.1),
+        CoarseDropout(max_holes=2, max_height=8, max_width=8, fill_value=0, p=0.3),
+        Resize(height=480, width=640, p=1.0),  # 모든 변환 후 크기 고정
+        Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
         ToTensorV2(),
-    ], keypoint_params=KeypointParams(format='xy', remove_invisible=False))
-
-    train_dataset = CameraControlDataset(train_images, train_labels, transform=train_transform, original_size=original_size)
-    test_dataset = CameraControlDataset(test_images, test_labels, transform=test_transform, original_size=original_size)
-
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-    # 모델 생성 및 프루닝 적용
-    model = CameraControlNet()
-    model = apply_pruning(model, amount=0.2)
-
-    # 학습
-    train_camera_control_model(model, train_loader, val_loader, device, epochs=50, model_save_path='./models')
-
-    # 양자화 적용
-    model.eval()
-
-    # 예측 결과 시각화
-    visualize_predictions(model, test_dataset, device, num_samples=5)
+    ], keypoint_params=KeypointParams(format='xy', remove_invisible=True))
+    
+    # 데이터셋 생성
+    train_dataset = TennisBallDataset(
+        images=train_images,
+        labels=train_labels,
+        transform=train_transform,
+        heatmap_size=(240, 320),  # heatmap은 이미지의 절반 크기
+        num_keypoints=1,
+        sigma=2,
+        augmentation_factor=5,  # 각 이미지를 5번 증강
+        original_image_size=(480, 640),  # (height, width)
+        margin=6  # 마진 설정
+    )
+    
+    val_dataset = TennisBallDataset(
+        images=val_images,
+        labels=val_labels,
+        transform=val_transform,
+        heatmap_size=(240, 320),  # heatmap은 이미지의 절반 크기
+        num_keypoints=1,
+        sigma=2,
+        augmentation_factor=3,  # 각 이미지를 3번 증강 (선택사항)
+        original_image_size=(480, 640),  # (height, width)
+        margin=6  # 마진 설정
+    )
+    
+    # 데이터 로더 설정
+    batch_size = 16
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=4,  # 시스템에 맞게 조정 (예: CPU 코어 수)
+        pin_memory=True
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=4,  # 시스템에 맞게 조정 (예: CPU 코어 수)
+        pin_memory=True
+    )
+    
+    # 모델 초기화
+    model = HeatmapModel(num_keypoints=1, heatmap_size=(240, 320), pretrained=False)
+    
+    # 학습 수행
+    train_model(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        device=device,
+        epochs=1,
+        lr=1e-4,
+        patience=10,
+        model_save_path='best_model.pth'
+    )
+    
+    # 모델 평가
+    mse, precision, recall = evaluate_model(model, val_loader, device)
+    
+    # 시각화 실행 (옵션)
+    visualize_predictions(model, val_dataset, device, num_samples=15)
+    
