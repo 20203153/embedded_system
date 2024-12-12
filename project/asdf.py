@@ -7,5 +7,7 @@ for node in model.graph.node:
     print(node.name)
 
 data = np.load("input_tensor.npy")
+reshape = np.transpose(data, (0, 3, 2, 1))
 
-print(data.shape)
+print(f"origin: {data.shape} / reshape: {reshape.shape}")
+np.save("input_tensor_reshape.npy", reshape)
