@@ -60,23 +60,12 @@ class TennisBallDataset(Dataset):
         self.original_image_size = original_image_size
         self.margin = margin
 
-        # Maintain labels for transformed states (flipping, etc.)
-        self.processed_labels = []
-        for label in self.labels:
-            x, y, visible = label
-            # Store the original label
-            processed_label = [x, y, visible]
-            # You can add transformations based on augmentations if needed
-            self.processed_labels.append(processed_label)
-
     def __len__(self):
         return len(self.images) * self.augmentation_factor
 
     def generate_heatmaps(self, keypoints):
         heatmaps = np.zeros((self.num_keypoints, self.heatmap_size[0], self.heatmap_size[1]), dtype=np.float32)
         for i, kp in enumerate(keypoints[:self.num_keypoints]):
-            if kp is None or (kp[0] == 0.0 and kp[1] == 0.0):
-                continue
             x, y = kp
             heatmaps[i] = generate_heatmap((self.heatmap_size[0], self.heatmap_size[1]), (y, x), self.sigma)
         return heatmaps
@@ -89,7 +78,7 @@ class TennisBallDataset(Dataset):
             raise ValueError(f"Unable to load image: {image_path}")
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-        label = self.processed_labels[real_idx]
+        label = self.labels[real_idx]
         x, y, visible = label
         keypoints = [[x, y]] if visible == 1 else []
 
@@ -102,7 +91,7 @@ class TennisBallDataset(Dataset):
         else:
             keypoints_aug = keypoints
 
-        # Scaled heatmap keys
+        # Heatmap scaling logic
         scale_x = self.heatmap_size[1] / self.original_image_size[1]
         scale_y = self.heatmap_size[0] / self.original_image_size[0]
 
@@ -120,17 +109,15 @@ class TennisBallDataset(Dataset):
 
         heatmaps = self.generate_heatmaps(keypoints_scaled)
 
-        # Scaling true labels back
+        # **Fixed: Scaling the Augmented Keypoints Instead of Original**
         if visible == 1:
-            true_x_scaled = x * scale_x
-            true_y_scaled = y * scale_y
+            true_x_scaled = kp[0] * scale_x  # Use augmented keypoint
+            true_y_scaled = kp[1] * scale_y  # Use augmented keypoint
             true_x_scaled = np.clip(true_x_scaled, self.margin, self.heatmap_size[1] - 1 - self.margin)
             true_y_scaled = np.clip(true_y_scaled, self.margin, self.heatmap_size[0] - 1 - self.margin)
             dataset_label = [true_x_scaled, true_y_scaled, visible]
         else:
             dataset_label = [0.0, 0.0, 0]
-
-        # print(f"Dataset label: {dataset_label}")  # Debug statement
 
         return image, torch.tensor(heatmaps, dtype=torch.float32), dataset_label
     
@@ -326,57 +313,67 @@ def evaluate_model(model, data_loader, device):
 # ----------------------------
 # 시각화 함수 수정
 # ----------------------------
-import matplotlib.pyplot as plt
-import numpy as np
-import torch
+def check_ball_recognition(heatmap, threshold=0.7):
+    """
+    Check if the ball is recognized in the heatmap based on a given threshold.
 
-def visualize_predictions(model, dataset, device, num_samples=5):
+    Args:
+        heatmap (numpy.ndarray): The predicted heatmap of shape (H, W).
+        threshold (float): The threshold value for determining recognition.
+
+    Returns:
+        bool: True if the ball is recognized, False otherwise.
+    """
+    # Get the maximum value in the heatmap
+    max_value = np.max(heatmap)
+
+    # Determine if the maximum value exceeds the threshold
+    return max_value >= threshold
+
+def visualize_predictions(model, dataset, device, num_samples=5, heatmap_threshold=0.5):
     model.eval()
     indices = np.random.choice(len(dataset), num_samples, replace=False)
-    scale_factor_x = dataset.original_image_size[1] / dataset.heatmap_size[1]  # 640 / 320 = 2
-    scale_factor_y = dataset.original_image_size[0] / dataset.heatmap_size[0]  # 480 / 240 = 2
-    
+    scale_factor_x = dataset.original_image_size[1] / dataset.heatmap_size[1]
+    scale_factor_y = dataset.original_image_size[0] / dataset.heatmap_size[0]
+
     for idx in indices:
         image, heatmap, dataset_label = dataset[idx]
-        input_image = image.unsqueeze(0).to(device)  # (C, H, W) -> (1, C, H, W)
-        
-        with torch.no_grad():
-            output_heatmap = model(input_image).squeeze(0).cpu().numpy()  # [num_keypoints, H, W]
+        input_image = image.unsqueeze(0).to(device)
 
-        # First keypoint - Get the max value position
+        with torch.no_grad():
+            output_heatmap = model(input_image).squeeze(0).cpu().numpy()
+
+        # Check if the ball is recognized based on the heatmap
+        ball_recognized = check_ball_recognition(output_heatmap[0], threshold=heatmap_threshold)
+
+        # Get the predicted keypoint position from the heatmap
         pred_y, pred_x = np.unravel_index(np.argmax(output_heatmap[0]), output_heatmap[0].shape)
-        
-        # Scale up the coordinates
         pred_x_original = pred_x * scale_factor_x
         pred_y_original = pred_y * scale_factor_y
-        
+
         plt.figure(figsize=(12, 6))
-        
         plt.subplot(1, 2, 1)
-        plt.imshow(image.permute(1, 2, 0).cpu().numpy())  # (C, H, W) -> (H, W, C)
-        plt.title('Transformed Image with Keypoints')
+        plt.imshow(image.permute(1, 2, 0).cpu().numpy())
         
-        plt.scatter(pred_x_original, pred_y_original, c='r', marker='x', s=100, label='Predicted')
-        
-        true_x, true_y, visible = dataset_label
-        
+        # Show predicted label only if recognized
+        if ball_recognized:
+            plt.scatter(pred_x_original, pred_y_original, c='r', marker='x', s=100, label='Predicted')
+
+        true_x, true_y, visible = dataset_label 
         if visible == 1:
             true_x_original = true_x * scale_factor_x
             true_y_original = true_y * scale_factor_y
             plt.scatter(true_x_original, true_y_original, c='g', marker='o', s=100, label='True')
-        
+
+        plt.title('Image with Keypoints')
         plt.legend()
-        
+
+        # Second subplot: Predicted heatmap
         plt.subplot(1, 2, 2)
         plt.imshow(output_heatmap[0], cmap='hot', interpolation='nearest')
         plt.title('Predicted Heatmap')
         plt.colorbar()
-        
-        plt.tight_layout()  # Adjust layout for better spacing
         plt.show()
-
-        # Optionally, clear the figure to free up memory
-        plt.clf()
 
 # ----------------------------
 # 데이터 유효성 검사 함수 정의
@@ -452,43 +449,28 @@ def display_random_samples(images, labels, num_samples=5, image_size=(480, 640))
 # 데이터 로딩 함수 정의
 # ----------------------------
 def load_data(csv_path, ball_dir, empty_dir, image_size=(480, 640), margin=6):
-    """
-    CSV 파일과 이미지 디렉토리에서 데이터를 로드하고, 유효하지 않은 키포인트를 제외합니다.
-    Args:
-        csv_path (str): 라벨 CSV 파일 경로.
-        ball_dir (str): 볼 이미지 디렉토리.
-        empty_dir (str): 빈 이미지 디렉토리.
-        image_size (tuple): 원본 이미지 크기 (height, width).
-        margin (int): 키포인트가 경계에서 최소 거리.
-    Returns:
-        images (list): 유효한 이미지 파일 경로 리스트.
-        labels (list): 각 이미지에 대한 라벨 리스트 [x, y, visible].
-    """
     df = pd.read_csv(csv_path)
     images = []
     labels = []
-    # 볼 이미지 로드
     for _, row in df.iterrows():
         img_name = row['image']
         x, y = row['x'], row['y']
         img_path = os.path.join(ball_dir, img_name)
         
-        # 이미지 존재 유무 검사
         if os.path.exists(img_path):
-            # 좌표 유효성 검사
             if margin <= x < image_size[1] - margin and margin <= y < image_size[0] - margin:
                 images.append(img_path)
-                labels.append([x, y, 1])  # Visible = 1
+                labels.append([x, y, 1])  # visible = 1
             else:
-                print(f"유효하지 않은 키포인트: {img_name}, x={x}, y={y} (이미지 크기: {image_size}) - 제외됨")
+                print(f"Invalid keypoint: {img_name}, x={x}, y={y}, skipped.")
         else:
-            print(f"이미지 파일을 찾을 수 없습니다: {img_path}")
-    # 빈 이미지 로드 (visible=0)
+            print(f"Image file not found: {img_path}, skipped.")
+
     for img_name in os.listdir(empty_dir):
         img_path = os.path.join(empty_dir, img_name)
-        if (os.path.isfile(img_path) and img_name != ".DS_Store"):
+        if os.path.isfile(img_path) and img_name != ".DS_Store":
             images.append(img_path)
-            labels.append([0.0, 0.0, 0])  # Visible = 0
+            labels.append([0.0, 0.0, 0])  # visible = 0
     return images, labels
 
 # ----------------------------
@@ -589,14 +571,14 @@ if __name__ == "__main__":
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=4,  # 시스템에 맞게 조정 (예: CPU 코어 수)
+        num_workers=1,  # 시스템에 맞게 조정 (예: CPU 코어 수)
         pin_memory=True
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=4,  # 시스템에 맞게 조정 (예: CPU 코어 수)
+        num_workers=1,  # 시스템에 맞게 조정 (예: CPU 코어 수)
         pin_memory=True
     )
     
@@ -610,14 +592,72 @@ if __name__ == "__main__":
         val_loader=val_loader,
         device=device,
         epochs=1,
-        lr=1e-4,
-        patience=10,
+        lr=1e-3,
+        patience=5,
         model_save_path='best_model.pth'
     )
+
+    # 실제 입력 이미지를 사용하여 ONNX 형식으로 모델 저장
+    num_samples = 50  # 사용할 샘플 수
+
+    # test_loader에서 이미지 가져오기
+    images = []
+
+    # test_loader에서 데이터 가져오기
+    for i, (image, heatmap, label) in enumerate(val_dataset):
+        if i >= num_samples:  # 원하는 샘플 수에 도달하면 종료
+            break
+        # image 변수를 만약 torch.Tensor이고 3채널을 의미하기 위해 permute()를 사용 
+        images.append(image.cpu().numpy())  # 이미지를 numpy 형식으로 변환
+
+    # 이미지를 텐서로 변환하고 ONNX로 내보내기
+    if len(images) > 0:
+        # 이미지를 (N, H, W, C) 형태로 만들기 위해 Numpy 배열 결합
+        input_tensor = np.array(images)  # [num_samples, H, W, C] 형태의 numpy 배열로 변환
+        print(f"input_tensor.npy 's shape: {input_tensor.shape}")
+        np.save("./input_tensor.npy", input_tensor.copy() / 255)
+
+        # 데이터의 형상을 확인하고 적절한 형태로 변환
+        input_tensor = torch.tensor(input_tensor, dtype=torch.float32).to(device)  # numpy에서 tensor로 변환
+
+        # 입력 텐서 정규화
+        input_tensor = input_tensor / 255.0  # 정규화
+
+        # ONNX 파일로 저장
+        torch.onnx.export(model, input_tensor, "model.onnx", export_params=True, 
+                        input_names=['input'], output_names=['output'],
+                        dynamic_axes={'input': {0: 'batch_size'}, 
+                                        'output': {0: 'batch_size'}})
+        print("Model has been exported to ONNX format using images from test_loader.")
+    else:
+        print("No valid images available for ONNX export.")
     
     # 모델 평가
     mse, precision, recall = evaluate_model(model, val_loader, device)
     
     # 시각화 실행 (옵션)
-    visualize_predictions(model, val_dataset, device, num_samples=15)
+    visualize_predictions(model, val_dataset, device, num_samples=15, heatmap_threshold=0.3)
+
+    thresholds = [0.3, 0.35, 0.4, 0.45]
+    results = {th: {"True Positives": 0, "True Negatives": 0, "False Positives": 0, "False Negatives": 0} for th in thresholds}
+    # test_loader에서 데이터 가져오기
+    for i, (image, heatmap, label) in enumerate(val_dataset):
+        input_image = image.unsqueeze(0).to(device)
+        with torch.no_grad():
+            output_heatmap = model(input_image).squeeze(0).cpu().numpy()
+        
+        for th in thresholds:
+            ball_recognized = check_ball_recognition(output_heatmap[0], threshold=th)
+            if ball_recognized and label[2] == 1:  # if detected and should be visible
+                results[th]["True Positives"] += 1
+            elif not ball_recognized and label[2] == 1:  # if not detected but should be visible
+                results[th]["False Negatives"] += 1
+            elif ball_recognized and label[2] == 0:  # if detected but should not be visible
+                results[th]["False Positives"] += 1
+            else:
+                results[th]["True Negatives"] += 1
+
+    # Print results
+    for th, metrics in results.items():
+        print(f"Threshold {th}: TP={metrics['True Positives']}, TN={metrics['True Negatives']}, FP={metrics['False Positives']}, FN={metrics['False Negatives']}")
     
