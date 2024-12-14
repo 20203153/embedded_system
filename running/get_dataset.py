@@ -34,39 +34,10 @@ try:
         # Capture image
         img = picam2.capture_array()
         
-        # Convert to grayscale
-        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-        
-        # Use HoughCircles to detect circles
-        circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, dp, min_dist,
-                                   param1=param1, param2=param2, minRadius=min_radius, maxRadius=max_radius)
-        
-        # Initialize variables
-        ball_detected = 0
-        x, y = None, None  # Default if no circle is found
-        
-        # Check if any circles were detected
-        if circles is not None:
-            circles = np.uint16(np.around(circles[0, :]))  # Convert to integer
-            
-            # Assuming one main ball to be detected
-            for (x, y, r) in circles:
-                if min_radius < r < max_radius:
-                    ball_detected = 1
-                    break  # Get the first valid ball and exit loop
-        
-            # Visual debugging (optional)
-            if ball_detected:
-                cv2.circle(img, (x, y), r, (0, 255, 0), 2)
-        
         # Generate a unique timestamp-based filename
         timestamp = int(time.time() * 1000)  # Unique timestamp in ms
         filename = os.path.join(output_dir, f"frame_{timestamp}.png")
         cv2.imwrite(filename, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-        
-        # Create a new DataFrame row
-        new_row = pd.DataFrame([[filename, ball_detected, x, y]], columns=labels_columns)
-        labels_df = pd.concat([labels_df, new_row], ignore_index=True)
         
         # Display the captured frame
         cv2.imshow('Frame', cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
