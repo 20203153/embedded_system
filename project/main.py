@@ -591,51 +591,61 @@ if __name__ == "__main__":
         train_loader=train_loader,
         val_loader=val_loader,
         device=device,
-        epochs=1,
+        epochs=500,
         lr=1e-3,
         patience=5,
         model_save_path='best_model.pth'
     )
 
     # 실제 입력 이미지를 사용하여 ONNX 형식으로 모델 저장
-    num_samples = 50  # 사용할 샘플 수
-
     # test_loader에서 이미지 가져오기
     images = []
 
-    # test_loader에서 데이터 가져오기
-    for i, (image, heatmap, label) in enumerate(val_dataset):
-        if i >= num_samples:  # 원하는 샘플 수에 도달하면 종료
-            break
-        # image 변수를 만약 torch.Tensor이고 3채널을 의미하기 위해 permute()를 사용 
-        images.append(image.cpu().numpy())  # 이미지를 numpy 형식으로 변환
+    # Sample images from the train_dataset
+    for i, (image, heatmap, label) in enumerate(train_dataset):
+        # Convert image tensor to numpy and append
+        images.append(image.permute(1, 2, 0).cpu().numpy())  # Ensure proper channel arrangement (H, W, C)
 
-    # 이미지를 텐서로 변환하고 ONNX로 내보내기
-    if len(images) > 0:
-        # 이미지를 (N, H, W, C) 형태로 만들기 위해 Numpy 배열 결합
-        input_tensor = np.array(images)  # [num_samples, H, W, C] 형태의 numpy 배열로 변환
-        print(f"input_tensor.npy 's shape: {input_tensor.shape}")
-        np.save("./input_tensor.npy", input_tensor.copy() / 255)
+    # Proceed if there are available images
+    if images:
+        # Convert list of images to numpy array (N, H, W, C)
+        input_tensor = np.array(images)
 
-        # 데이터의 형상을 확인하고 적절한 형태로 변환
-        input_tensor = torch.tensor(input_tensor, dtype=torch.float32).to(device)  # numpy에서 tensor로 변환
+        # Select a sample of 200 images, if less than 200, adjust accordingly
+        if len(input_tensor) > 200:
+            idx = np.random.choice(len(input_tensor), 200, replace=False)
+            input_tensor = input_tensor[idx]
+        
+        # Save the input tensor in npy format for potential future use
+        input_tensor_npy = input_tensor / 255.0  # Scale input appropriately
+        np.save("./input_tensor.npy", input_tensor_npy)
 
-        # 입력 텐서 정규화
-        input_tensor = input_tensor / 255.0  # 정규화
+        # Convert numpy array to PyTorch tensor
+        input_tensor = torch.tensor(input_tensor, dtype=torch.float32).to(device)
 
-        # ONNX 파일로 저장
-        torch.onnx.export(model, input_tensor, "model.onnx", export_params=True, 
-                        input_names=['input'], output_names=['output'],
-                        dynamic_axes={'input': {0: 'batch_size'}, 
-                                        'output': {0: 'batch_size'}})
-        print("Model has been exported to ONNX format using images from test_loader.")
+        # Transpose the input tensor to (N, C, H, W) for PyTorch models
+        input_tensor = input_tensor.permute(0, 3, 1, 2)
+
+        # Model export to ONNX format
+        onnx_file_path = "model.onnx"
+        torch.onnx.export(
+            model,
+            input_tensor,
+            onnx_file_path,
+            export_params=True,
+            input_names=['input'],
+            output_names=['output'],
+            dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}
+        )
+        print("Model has been exported to ONNX format using images from train_dataset.")
     else:
         print("No valid images available for ONNX export.")
-    
-    # 모델 평가
+
+    # Evaluate the model
     mse, precision, recall = evaluate_model(model, val_loader, device)
-    
-    # 시각화 실행 (옵션)
+    print(f"Model Evaluation - MSE: {mse}, Precision: {precision}, Recall: {recall}")
+
+    # Visualization function
     visualize_predictions(model, val_dataset, device, num_samples=15, heatmap_threshold=0.3)
 
     thresholds = [0.3, 0.35, 0.4, 0.45]

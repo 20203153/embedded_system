@@ -9,6 +9,10 @@ from picamera2 import Picamera2
 output_dir = './data'
 os.makedirs(output_dir, exist_ok=True)
 
+# Initialize an empty DataFrame for storing labels
+labels_columns = ['filename', 'ball_detected', 'x', 'y']
+labels_df = pd.DataFrame(columns=labels_columns)
+
 # Initialize Picamera2
 picam2 = Picamera2()
 camera_config = picam2.create_still_configuration(main={"size": (640, 480), "format": "RGB888"})
@@ -50,3 +54,5 @@ except KeyboardInterrupt:
 finally:
     picam2.stop()
     cv2.destroyAllWindows()
+    # Save labels DataFrame to CSV
+    labels_df.to_csv(os.path.join(output_dir, 'labels.csv'), index=False)
