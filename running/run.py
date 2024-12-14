@@ -1,41 +1,52 @@
 import hailo_platform as hlp
 import cv2
-from hailo_platform import (HEF, Device, VDevice, HailoStreamInterface, InferVStreams, ConfigureParams,
-    InputVStreamParams, OutputVStreamParams, InputVStreams, OutputVStreams)
-from hailo_platform import FormatType
+import numpy as np
 from picamera2 import Picamera2, Preview
+from picamera2.devices import Hailo
 
 # Initialize Hailo device and model
 INPUT_RES_H = 480
 INPUT_RES_W = 640
 
 hef_path = 'model.hef'
-hef = HEF(hef_path)
 
-devices = Device.scan()
-# Define prediction format if needed
+def sigmoid(z):
+    return 1/(1 + np.exp(-z))
 
-with VDevice(device_ids=devices) as target:
-    configure_params = ConfigureParams.create_from_hef(hef, interface=HailoStreamInterface.PCIe)
-    network_group = target.configure(hef, configure_params)[0]
-    network_group_params = network_group.create_params()
-    input_vstream_info = hef.get_input_vstream_infos()[0]
-    output_vstream_info = hef.get_output_vstream_infos()[0]
-    input_vstreams_params = InputVStreamParams.make_from_network_group(network_group, quantized=False, format_type=FormatType.FLOAT32)
-    output_vstreams_params = OutputVStreamParams.make_from_network_group(network_group, quantized=False, format_type=FormatType.FLOAT32)
-    height, width, channels = hef.get_input_vstream_infos()[0].shape
-
-    # Picamera2 ê°ì²´ ìì±
+with Hailo(hef_path) as hailo:
+    # Picamera2
     picam2 = Picamera2()
 
-    # ì¹´ë©ë¼ í´ìë ì¤ì 
-    picam2.configure(picam2.create_video_configuration(main={"size": (640, 480)}))
+    picam2.configure(picam2.create_video_configuration(main={"size": (1280, 720)}, lores={'size': hailo.get_input_shape(), 'format': 'RGB888'}))
 
-    # ë¯¸ë¦¬ë³´ê¸° ìì
-    picam2.start_preview(Preview.QTGL)
+    try:
+        picam2.start()
 
-    # ë¹ëì¤ ì¤í¸ë¦¬ë° ìì
-    picam2.start()
+        while True:
+            img = picam2.capture_array('lores')
+            results = sigmoid(np.array(hailo.run(img)))
 
-picam2.stop()
-cv2.destroyAllWindows()
+            print(results.max())
+
+            # Assuming results are in float range [0, 1]
+            # Scale to [0, 255] and convert to uint8
+            scaled_heatmap = (results * 255).astype('uint8')
+
+            # Apply color map to the scaled heatmap
+            heatmap = cv2.applyColorMap(scaled_heatmap, cv2.COLORMAP_JET)
+
+            # Display the camera feed
+            cv2.imshow("Camera Feed", img)
+
+            # Display the heatmap
+            cv2.imshow("Heatmap", heatmap)
+
+            if cv2.waitKey(1) & 0xFF == ord('q'):  # Press 'q' to quit
+                break
+    except KeyboardInterrupt:
+        print("inturrupted.")
+    except Exception as ex:
+        print(ex)
+        pass
+    finally:
+        picam2.stop()
