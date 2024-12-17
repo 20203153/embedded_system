@@ -46,31 +46,28 @@ class TennisBallDataset(Dataset):
         self.augmentation_factor = augmentation_factor
         self.original_image_size = original_image_size
         self.margin = margin
-    
+
     def __len__(self):
         return len(self.images) * self.augmentation_factor
-    
+
     def generate_heatmaps(self, keypoints):
         heatmaps = np.zeros((self.num_keypoints, self.heatmap_size[0], self.heatmap_size[1]), dtype=np.float32)
         for i, kp in enumerate(keypoints[:self.num_keypoints]):
             x, y = kp
             heatmaps[i] = generate_heatmap((self.heatmap_size[0], self.heatmap_size[1]), (y, x), self.sigma)
         return heatmaps
-    
+
     def __getitem__(self, idx):
         real_idx = idx // self.augmentation_factor
         image_path = self.images[real_idx]
         image = cv2.imread(image_path, cv2.IMREAD_COLOR)
-        
         if image is None:
             raise ValueError(f"Unable to load image: {image_path}")
-        
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         label = self.labels[real_idx]
         x, y, visible = label
-        
         keypoints = [[x, y]] if visible == 1 else []
-        
+
         # Perform the augmentations
         if self.transform:
             augmented = self.transform(image=image, keypoints=keypoints)
@@ -78,7 +75,7 @@ class TennisBallDataset(Dataset):
             keypoints_aug = augmented['keypoints']
         else:
             keypoints_aug = keypoints
-        
+
         # Heatmap scaling logic
         scale_x = self.heatmap_size[1] / self.original_image_size[1]
         scale_y = self.heatmap_size[0] / self.original_image_size[0]
@@ -93,21 +90,12 @@ class TennisBallDataset(Dataset):
             y_scaled = np.clip(kp[1] * scale_y, self.margin, self.heatmap_size[0] - 1 - self.margin)
             keypoints_scaled = [[x_scaled, y_scaled]]
             visible = 1
-            
-            # Alternatively, include true coordinates directly for the dataset label
-            true_x_scaled = kp[0] * scale_x  
-            true_y_scaled = kp[1] * scale_y  
-            true_x_scaled = np.clip(true_x_scaled, self.margin, self.heatmap_size[1] - 1 - self.margin)
-            true_y_scaled = np.clip(true_y_scaled, self.margin, self.heatmap_size[0] - 1 - self.margin)
-        
-        # Generate heatmaps using scaled keypoints
-        heatmaps = self.generate_heatmaps(keypoints_scaled)
-        
-        if visible == 1:
-            dataset_label = [true_x_scaled, true_y_scaled, visible]
-        else:
-            dataset_label = [0.0, 0.0, 0]
 
+        heatmaps = self.generate_heatmaps(keypoints_scaled)
+
+        true_x_scaled, true_y_scaled = (x_scaled, y_scaled) if visible == 1 else (0.0, 0.0)
+        
+        dataset_label = [true_x_scaled, true_y_scaled, visible]
         return image, torch.tensor(heatmaps, dtype=torch.float32), dataset_label
 
 # ----------------------------
@@ -136,7 +124,7 @@ class ResBlock(nn.Module):
 class HeatmapModel(nn.Module):
     def __init__(self, num_keypoints=1, heatmap_size=(240, 320), pretrained=False):
         super(HeatmapModel, self).__init__()
-        self.res_blocks = nn.Sequential(*[ResBlock(3 if i == 0 else 16, 16) for i in range(32)])  # 10 residual blocks
+        self.res_blocks = nn.Sequential(*[ResBlock(3 if i == 0 else 16, 16) for i in range(20)])  # 10 residual blocks
         self.output_heatmaps = nn.Conv2d(16, num_keypoints, kernel_size=1)
         self.heatmap_size = heatmap_size
 
@@ -182,20 +170,25 @@ class EarlyStopping:
 # Training Function
 # ----------------------------
 
-def train_model(model, train_loader, val_loader, device, epochs=100, lr=1e-4, patience=10, model_save_path='best_model.pth', delta=0.0):
+# Training function for keypoint detection
+def train_model(model, train_loader, val_loader, device, epochs=100, lr=1e-4, patience=10, model_save_path='best_model.pth', delta=1e-6):
     model.to(device)
-    
+    if torch.cuda.device_count() > 1:
+        model = nn.DataParallel(model)  # Use multiple GPUs
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=patience // 2)
-    criterion = nn.MSELoss()
+    criterion = nn.MSELoss() # Change loss if required
     early_stopping = EarlyStopping(patience=patience, verbose=True, path=model_save_path, delta=delta)
 
-    for epoch in tqdm(range(1, epochs + 1), "Epoch", leave=True, mininterval=20):
+    for epoch in range(epochs):
         model.train()
         running_loss = 0.0
-        for images, heatmaps, _ in tqdm(train_loader, desc=f"Epoch {epoch} - Training", leave=False, mininterval=0.5):
+        
+        for images, heatmaps, _ in tqdm(train_loader, desc=f"Epoch {epoch + 1} - Training", leave=False):
             images = images.to(device)
             heatmaps = heatmaps.to(device)
+
             optimizer.zero_grad()
             outputs = model(images)
             loss = criterion(outputs, heatmaps)
@@ -209,17 +202,19 @@ def train_model(model, train_loader, val_loader, device, epochs=100, lr=1e-4, pa
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for images, heatmaps, _ in tqdm(val_loader, desc=f"Epoch {epoch} - Validation", leave=False, mininterval=0.5):
+            for images, heatmaps, _ in tqdm(val_loader, desc=f"Epoch {epoch + 1} - Validation", leave=False):
                 images = images.to(device)
                 heatmaps = heatmaps.to(device)
+
                 outputs = model(images)
                 loss = criterion(outputs, heatmaps)
                 val_loss += loss.item() * images.size(0)
 
         val_epoch_loss = val_loss / len(val_loader.dataset)
-        print(f"Epoch {epoch}: Train Loss = {epoch_loss:.6f}, Val Loss = {val_epoch_loss:.6f}")
+        print(f"Epoch {epoch + 1}: Train Loss = {epoch_loss:.6f}, Val Loss = {val_epoch_loss:.6f}")
         scheduler.step(val_epoch_loss)
         early_stopping(val_epoch_loss, model)
+
         if early_stopping.early_stop:
             print("Early stopping triggered. Stopping training.")
             break
@@ -228,18 +223,17 @@ def train_model(model, train_loader, val_loader, device, epochs=100, lr=1e-4, pa
     model.load_state_dict(torch.load(model_save_path))
     print(f"Best model loaded from {model_save_path}")
 
-# ----------------------------
-# Evaluation Function
-# ----------------------------
-
+# Evaluation function for keypoint detection
 def evaluate_model(model, data_loader, device):
     model.eval()
-    all_preds, all_labels = [], []
-
+    all_preds = []
+    all_labels = []
+    
     with torch.no_grad():
         for images, heatmaps, _ in tqdm(data_loader, desc="Evaluating", leave=False):
             images = images.to(device)
             heatmaps = heatmaps.to(device)
+
             outputs = model(images)
             all_preds.append(outputs.cpu().numpy())
             all_labels.append(heatmaps.cpu().numpy())
@@ -250,7 +244,7 @@ def evaluate_model(model, data_loader, device):
     mse = mean_squared_error(all_labels.flatten(), all_preds.flatten())
     print(f"Evaluation MSE: {mse:.6f}")
 
-    # Further evaluation metrics (Precision, Recall)
+    # Additional evaluation metrics (Precision, Recall)
     precision, recall = 0.0, 0.0
     for i in range(len(all_preds)):
         pred_heatmap = all_preds[i][0]
@@ -258,8 +252,9 @@ def evaluate_model(model, data_loader, device):
         pred_y, pred_x = np.unravel_index(np.argmax(pred_heatmap), pred_heatmap.shape)
         true_y, true_x = np.unravel_index(np.argmax(true_heatmap), true_heatmap.shape)
 
-        distance = np.sqrt((pred_x - true_x) **2 + (pred_y - true_y)** 2)
-        threshold = 2  # Heatmap coordinate threshold
+        distance = np.sqrt((pred_x - true_x) ** 2 + (pred_y - true_y) ** 2)
+        threshold = 2  # Threshold for recognizing a hit
+
         if distance <= threshold:
             precision += 1
             recall += 1
@@ -421,7 +416,7 @@ if __name__ == "__main__":
     val_image_dir = './data/test/balls'
     val_empty_image_dir = './data/test/empty'
     
-    device = torch.device("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
+    device = torch.device("cuda:0" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
     print(f"Using device: {device}")
     
     # Load datasets
@@ -539,11 +534,11 @@ if __name__ == "__main__":
         train_loader=train_loader,
         val_loader=val_loader,
         device=device,
-        epochs=100,
+        epochs=500,
         lr=1e-3,
-        patience=5,
+        patience=15,
         model_save_path='best_model.pth',
-        delta=1e-5
+        delta=1e-6
     )
     
     # Export model to ONNX
@@ -556,7 +551,7 @@ if __name__ == "__main__":
     images = []
     for image in image_generator(train_dataset):
         images.append(image)
-        if len(images) == 50:  # Limit to the first 200 images
+        if len(images) == 16:  # Limit to the first 200 images
             break
 
     # Proceed if there are valid images
@@ -568,18 +563,19 @@ if __name__ == "__main__":
         # Convert to PyTorch tensor
         input_tensor = torch.tensor(input_tensor, dtype=torch.float32).to(device)
         input_tensor = input_tensor.permute(0, 3, 1, 2)  # Reshape to (N, C, H, W)
-
-        # Export model to ONNX format
-        onnx_file_path = "model.onnx"
-        torch.onnx.export(
-            model,
-            input_tensor,
-            onnx_file_path,
-            export_params=True,
-            input_names=['input'],
-            output_names=['output'],
-            dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}
-        )
+        model.eval()
+        with torch.no_grad():
+            # Export model to ONNX format
+            onnx_file_path = "model.onnx"
+            torch.onnx.export(
+                model,
+                input_tensor,
+                onnx_file_path,
+                export_params=True,
+                input_names=['input'],
+                output_names=['output'],
+                dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}
+            )
         print("Model has been exported to ONNX format using images from train_dataset.")
     else:
         print("No valid images available for ONNX export.")
